@@ -27,7 +27,6 @@ type AppSettings = {
 
 const HIDE_WINDOW_EVENT = "hide_window";
 const OPEN_SETTINGS_EVENT = "open_settings";
-
 function App() {
   const [query, setQuery] = useState("");
   const [results, setResults] = useState<SearchResult[]>([]);
@@ -325,6 +324,7 @@ function App() {
         placeholder="搜索应用和网页..."
         autoFocus
       />
+      <div className="search-hint">支持拼音全拼及首字母缩写匹配</div>
       {results.length > 0 ? (
         <ul className="results-list">
           {results.map((item: SearchResult, index: number) => (

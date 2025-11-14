@@ -11,6 +11,7 @@ use winreg::{enums::*, RegKey};
 
 use crate::{
     models::{AppType, ApplicationInfo},
+    text_utils::extend_keywords_with_pinyin,
     windows_utils::{expand_env_vars, extract_icon_from_path},
 };
 
@@ -146,6 +147,7 @@ fn registry_entry_to_app(
     }
 
     keywords.retain(|value| !value.trim().is_empty());
+    extend_keywords_with_pinyin(&mut keywords);
     keywords.sort();
     keywords.dedup();
 
@@ -278,6 +280,7 @@ async fn enumerate_uwp_apps() -> WinResult<Vec<ApplicationInfo>> {
                 }
             }
             keywords.retain(|value| !value.is_empty());
+            extend_keywords_with_pinyin(&mut keywords);
             keywords.sort();
             keywords.dedup();
 

@@ -5,6 +5,7 @@ mod hotkey;
 mod indexer;
 mod models;
 mod state;
+mod text_utils;
 mod windows_utils;
 
 use commands::{

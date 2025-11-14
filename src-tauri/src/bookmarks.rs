@@ -7,6 +7,8 @@ use log::{debug, warn};
 use serde_json::Value;
 use sha1::{Digest, Sha1};
 
+use crate::text_utils::extend_keywords_with_pinyin;
+
 #[derive(Debug, Clone)]
 pub struct BookmarkEntry {
     pub id: String,
@@ -165,6 +167,7 @@ fn collect_node(
             }
             keywords.push(profile_label.to_string());
             keywords.retain(|value| !value.trim().is_empty());
+            extend_keywords_with_pinyin(&mut keywords);
             keywords.sort();
             keywords.dedup();
 
