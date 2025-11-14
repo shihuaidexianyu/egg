@@ -24,6 +24,8 @@ use crate::{
 };
 
 const DEFAULT_RESULT_LIMIT: usize = 8;
+const MIN_QUERY_DELAY_MS: u64 = 50;
+const MAX_QUERY_DELAY_MS: u64 = 2000;
 pub const HIDE_WINDOW_EVENT: &str = "hide_window";
 pub const OPEN_SETTINGS_EVENT: &str = "open_settings";
 
@@ -192,6 +194,7 @@ pub fn get_settings(state: State<'_, AppState>) -> AppConfig {
 #[tauri::command]
 pub fn update_hotkey(
     hotkey: String,
+    query_delay_ms: Option<u64>,
     app_handle: AppHandle,
     state: State<'_, AppState>,
 ) -> Result<AppConfig, String> {
@@ -207,8 +210,14 @@ pub fn update_hotkey(
         .lock()
         .map_err(|_| "无法获取配置".to_string())?;
     guard.global_hotkey = normalized.to_string();
+    guard.query_delay_ms = normalize_query_delay(query_delay_ms, guard.query_delay_ms);
     guard.save(&app_handle)?;
     Ok(guard.clone())
+}
+
+fn normalize_query_delay(candidate: Option<u64>, current: u64) -> u64 {
+    let value = candidate.unwrap_or(current);
+    value.clamp(MIN_QUERY_DELAY_MS, MAX_QUERY_DELAY_MS)
 }
 
 fn launch_win32_app(path: &str) -> Result<(), String> {

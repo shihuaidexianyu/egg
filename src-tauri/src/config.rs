@@ -8,14 +8,22 @@ const CONFIG_FILE: &str = "settings.json";
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AppConfig {
     pub global_hotkey: String,
+    #[serde(default = "default_query_delay")]
+    // ensure backward compatibility when loading old config files
+    pub query_delay_ms: u64,
 }
 
 impl Default for AppConfig {
     fn default() -> Self {
         Self {
             global_hotkey: "Alt+Space".to_string(),
+            query_delay_ms: default_query_delay(),
         }
     }
+}
+
+const fn default_query_delay() -> u64 {
+    120
 }
 
 impl AppConfig {

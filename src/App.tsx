@@ -23,6 +23,7 @@ type SearchResult = {
 
 type AppSettings = {
   global_hotkey: string;
+  query_delay_ms: number;
 };
 
 const HIDE_WINDOW_EVENT = "hide_window";
@@ -36,11 +37,13 @@ function App() {
   const [settings, setSettings] = useState<AppSettings | null>(null);
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
   const [hotkeyInput, setHotkeyInput] = useState("");
-  const [isSavingHotkey, setIsSavingHotkey] = useState(false);
+  const [queryDelayInput, setQueryDelayInput] = useState("");
+  const [isSavingSettings, setIsSavingSettings] = useState(false);
   const toastTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const settingsInputRef = useRef<HTMLInputElement | null>(null);
   const latestQueryRef = useRef("");
   const currentWindow = useMemo(() => getCurrentWindow(), []);
+  const queryDelayMs = settings?.query_delay_ms ?? 120;
 
   const showToast = useCallback((message: string) => {
     setToastMessage(message);
@@ -58,6 +61,7 @@ function App() {
       const appSettings = await invoke<AppSettings>("get_settings");
       setSettings(appSettings);
       setHotkeyInput(appSettings.global_hotkey);
+      setQueryDelayInput(String(appSettings.query_delay_ms));
     } catch (error) {
       console.error("Failed to load settings", error);
       showToast("加载设置失败");
@@ -181,12 +185,12 @@ function App() {
         console.error("Failed to query", error);
         showToast("搜索失败，请稍后重试");
       }
-    }, 120);
+    }, queryDelayMs);
 
     return () => {
       window.clearTimeout(timeoutId);
     };
-  }, [query, isComposing, showToast]);
+  }, [query, isComposing, showToast, queryDelayMs]);
 
   const handleKeyDown = useCallback(
     async (event: InputKeyboardEvent<HTMLInputElement>) => {
@@ -249,6 +253,22 @@ function App() {
     [results, showToast],
   );
 
+  const resolveResultTag = useCallback((item: SearchResult) => {
+    switch (item.action_id) {
+      case "app":
+      case "uwp":
+        return "应用";
+      case "bookmark":
+        return "书签";
+      case "url":
+        return "网址";
+      case "search":
+        return "搜索";
+      default:
+        return "其他";
+    }
+  }, []);
+
   const handleSettingsButtonClick = useCallback(() => {
     setIsSettingsOpen((current) => {
       if (current) {
@@ -263,41 +283,64 @@ function App() {
     setIsSettingsOpen(false);
   }, []);
 
-  const handleHotkeySave = useCallback(async () => {
-    const trimmed = hotkeyInput.trim();
-    if (!trimmed) {
+  const handleSettingsSave = useCallback(async () => {
+    const trimmedHotkey = hotkeyInput.trim();
+    if (!trimmedHotkey) {
       showToast("快捷键不能为空");
       return;
     }
 
+    const trimmedDelay = queryDelayInput.trim();
+    if (!trimmedDelay) {
+      showToast("延迟不能为空");
+      return;
+    }
+    const parsedDelay = Number(trimmedDelay);
+    if (!Number.isFinite(parsedDelay)) {
+      showToast("请输入有效的延迟毫秒数");
+      return;
+    }
+
+    if (parsedDelay < 50 || parsedDelay > 2000) {
+      showToast("延迟需在 50~2000ms 之间");
+      return;
+    }
+
     try {
-      setIsSavingHotkey(true);
+      setIsSavingSettings(true);
       const updated = await invoke<AppSettings>("update_hotkey", {
-        hotkey: trimmed,
+        hotkey: trimmedHotkey,
+        query_delay_ms: Math.round(parsedDelay),
       });
       setSettings(updated);
       setHotkeyInput(updated.global_hotkey);
-      showToast("全局热键已更新");
+      setQueryDelayInput(String(updated.query_delay_ms));
+      showToast("设置已更新");
     } catch (error) {
-      console.error("Failed to update hotkey", error);
-      showToast("更新热键失败");
+      console.error("Failed to update settings", error);
+      showToast("更新设置失败");
     } finally {
-      setIsSavingHotkey(false);
+      setIsSavingSettings(false);
     }
-  }, [hotkeyInput, showToast]);
+  }, [hotkeyInput, queryDelayInput, showToast]);
 
-  const handleHotkeyKeyDown = useCallback(
+  const handleSettingsKeyDown = useCallback(
     (event: InputKeyboardEvent<HTMLInputElement>) => {
       if (event.key === "Enter") {
         event.preventDefault();
-        void handleHotkeySave();
+        void handleSettingsSave();
       }
     },
-    [handleHotkeySave],
+    [handleSettingsSave],
   );
 
+  const hasQuery = query.trim().length > 0;
+
   return (
-    <div className="container" data-tauri-drag-region>
+    <div
+      className={hasQuery ? "container" : "container compact"}
+      data-tauri-drag-region
+    >
       <button
         type="button"
         className="settings-button"
@@ -321,48 +364,47 @@ function App() {
           setQuery(event.currentTarget.value);
         }}
         onKeyDown={handleKeyDown}
-        placeholder="搜索应用和网页..."
+        placeholder="搜索应用和网页（支持拼音/首字母）"
         autoFocus
       />
-      <div className="search-hint">支持拼音全拼及首字母缩写匹配</div>
-      {results.length > 0 ? (
-        <ul className="results-list">
-          {results.map((item: SearchResult, index: number) => (
-            <li
-              key={item.id}
-              className={
-                index === selectedIndex ? "result-item selected" : "result-item"
-              }
-              onMouseEnter={() => setSelectedIndex(index)}
-              onMouseDown={(event: ListMouseEvent<HTMLLIElement>) =>
-                event.preventDefault()
-              }
-              onClick={() => void handleMouseClick(index)}
-            >
-              {item.icon ? (
-                <img
-                  src={`data:image/png;base64,${item.icon}`}
-                  className="result-icon"
-                  alt="result icon"
-                />
-              ) : (
-                <div className="result-icon placeholder" />
-              )}
-              <div className="result-text">
-                <div className="result-title-row">
+      {hasQuery ? (
+        results.length > 0 ? (
+          <ul className="results-list">
+            {results.map((item: SearchResult, index: number) => (
+              <li
+                key={item.id}
+                className={
+                  index === selectedIndex
+                    ? "result-item selected"
+                    : "result-item"
+                }
+                onMouseEnter={() => setSelectedIndex(index)}
+                onMouseDown={(event: ListMouseEvent<HTMLLIElement>) =>
+                  event.preventDefault()
+                }
+                onClick={() => void handleMouseClick(index)}
+              >
+                {item.icon ? (
+                  <img
+                    src={`data:image/png;base64,${item.icon}`}
+                    className="result-icon"
+                    alt="result icon"
+                  />
+                ) : (
+                  <div className="result-icon placeholder" />
+                )}
+                <div className="result-text">
                   <div className="result-title">{item.title}</div>
-                  {item.action_id === "bookmark" ? (
-                    <span className="result-tag">书签</span>
-                  ) : null}
+                  <div className="result-subtitle">{item.subtitle}</div>
                 </div>
-                <div className="result-subtitle">{item.subtitle}</div>
-              </div>
-            </li>
-          ))}
-        </ul>
-      ) : (
-        <div className="empty-state">开始输入以搜索应用或网页</div>
-      )}
+                <div className="result-type-tag">{resolveResultTag(item)}</div>
+              </li>
+            ))}
+          </ul>
+        ) : (
+          <div className="empty-state">没有匹配的结果</div>
+        )
+      ) : null}
       {isSettingsOpen ? (
         <button
           type="button"
@@ -381,6 +423,10 @@ function App() {
             <div className="settings-subtitle">
               当前快捷键：{settings?.global_hotkey ?? "加载中..."}
             </div>
+            <div className="settings-subtitle">
+              当前匹配延迟：
+              {settings ? `${settings.query_delay_ms} ms` : "加载中..."}
+            </div>
           </div>
         </div>
         <div className="settings-field">
@@ -393,12 +439,32 @@ function App() {
             onChange={(event: ChangeEvent<HTMLInputElement>) =>
               setHotkeyInput(event.currentTarget.value)
             }
-            onKeyDown={handleHotkeyKeyDown}
+            onKeyDown={handleSettingsKeyDown}
             placeholder="例如 Alt+Space"
             className="settings-input"
           />
           <span className="settings-hint">
             用 + 连接组合键，例如 Ctrl+Shift+P
+          </span>
+        </div>
+        <div className="settings-field">
+          <label htmlFor="query-delay-input">匹配延迟 (毫秒)</label>
+          <input
+            id="query-delay-input"
+            type="number"
+            min={50}
+            max={2000}
+            step={10}
+            value={queryDelayInput}
+            onChange={(event: ChangeEvent<HTMLInputElement>) =>
+              setQueryDelayInput(event.currentTarget.value)
+            }
+            onKeyDown={handleSettingsKeyDown}
+            placeholder="例如 120"
+            className="settings-input"
+          />
+          <span className="settings-hint">
+            控制搜索防抖延迟，范围 50~2000 毫秒
           </span>
         </div>
         <div className="settings-actions">
@@ -412,10 +478,10 @@ function App() {
           <button
             type="button"
             className="primary-button"
-            onClick={() => void handleHotkeySave()}
-            disabled={isSavingHotkey}
+            onClick={() => void handleSettingsSave()}
+            disabled={isSavingSettings}
           >
-            {isSavingHotkey ? "保存中..." : "保存"}
+            {isSavingSettings ? "保存中..." : "保存"}
           </button>
         </div>
       </div>
