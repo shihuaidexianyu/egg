@@ -335,12 +335,13 @@ function App() {
   );
 
   const hasQuery = query.trim().length > 0;
+  const hasMatches = results.length > 0;
+  const containerClass = hasMatches
+    ? "container expanded"
+    : "container compact";
 
   return (
-    <div
-      className={hasQuery ? "container" : "container compact"}
-      data-tauri-drag-region
-    >
+    <div className={containerClass} data-tauri-drag-region>
       <button
         type="button"
         className="settings-button"
@@ -367,8 +368,10 @@ function App() {
         placeholder="搜索应用和网页（支持拼音/首字母）"
         autoFocus
       />
-      {hasQuery ? (
-        results.length > 0 ? (
+      <div
+        className={hasMatches ? "results-wrapper expanded" : "results-wrapper"}
+      >
+        {hasMatches ? (
           <ul className="results-list">
             {results.map((item: SearchResult, index: number) => (
               <li
@@ -401,9 +404,10 @@ function App() {
               </li>
             ))}
           </ul>
-        ) : (
-          <div className="empty-state">没有匹配的结果</div>
-        )
+        ) : null}
+      </div>
+      {hasQuery && !hasMatches ? (
+        <div className="empty-hint">没有匹配的结果</div>
       ) : null}
       {isSettingsOpen ? (
         <button

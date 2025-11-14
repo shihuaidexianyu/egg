@@ -32,22 +32,27 @@ body,
 .container {
   display: flex;
   flex-direction: column;
-  height: 100vh;
   width: min(720px, calc(100vw - 32px));
-  margin: 0 auto;
-  padding: 12px;
-  border-radius: 12px;
-  background-color: rgba(25, 25, 30, 0.9);
+  margin: 24px auto;
+  padding: 16px 18px 28px;
+  border-radius: 16px;
+  background-color: rgba(25, 25, 30, 0.92);
   backdrop-filter: blur(20px) saturate(180%);
-  box-shadow: none;
+  box-shadow: 0 18px 36px rgba(0, 0, 0, 0.4);
   position: relative;
-  padding-bottom: 56px;
+  gap: 12px;
+  transition:
+    padding-bottom 0.2s ease,
+    box-shadow 0.2s ease;
 }
 
 .container.compact {
-  height: auto;
-  min-height: unset;
-  padding-bottom: 28px;
+  padding-bottom: 20px;
+  box-shadow: none;
+}
+
+.container.expanded {
+  padding-bottom: 48px;
 }
 
 .settings-button {
@@ -90,9 +95,22 @@ body,
   color: rgba(255, 255, 255, 0.35);
 }
 
+.results-wrapper {
+  max-height: 0;
+  opacity: 0;
+  overflow: hidden;
+  transition:
+    max-height 0.24s ease,
+    opacity 0.18s ease;
+}
+
+.results-wrapper.expanded {
+  max-height: 520px;
+  opacity: 1;
+}
+
 .results-list {
-  flex: 1;
-  margin: 12px 0 0 0;
+  margin: 8px 0 0 0;
   padding: 0 8px 8px 8px;
   list-style: none;
   overflow-y: auto;
@@ -191,16 +209,14 @@ body,
   word-break: break-word;
 }
 
-.empty-state {
-  flex: 1;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  color: rgba(255, 255, 255, 0.4);
-  font-size: clamp(14px, 1.2vw, 16px);
-  padding: 0 24px;
-  text-align: center;
-  text-wrap: balance;
+.empty-hint {
+  margin-top: 12px;
+  padding: 6px 10px;
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.08);
+  color: rgba(255, 255, 255, 0.7);
+  font-size: 13px;
+  text-align: left;
 }
 
 .toast {
