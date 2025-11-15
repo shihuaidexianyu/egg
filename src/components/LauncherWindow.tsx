@@ -346,9 +346,6 @@ export const LauncherWindow = () => {
 
     return (
         <div className={windowClassName} data-tauri-drag-region>
-            <header className="chrome-bar">
-                <div className="chrome-grip" aria-hidden="true" data-tauri-drag-region />
-            </header>
             <section className={isIdle ? "search-area search-area--solo" : "search-area"}>
                 <SearchBar
                     value={state.inputValue}

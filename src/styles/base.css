@@ -92,32 +92,6 @@ input {
     box-shadow: var(--window-border);
 }
 
-.chrome-bar {
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    gap: 0;
-}
-
-.chrome-grip {
-    flex: 1;
-    height: 22px;
-    border-radius: 999px;
-    background: var(--chrome-button-bg);
-    border: 1px solid var(--chrome-button-border);
-    max-width: 200px;
-}
-
-.chrome-grip:after {
-    content: "";
-    display: block;
-    margin: 5px auto;
-    width: 80px;
-    height: 2px;
-    border-radius: 999px;
-    background: rgba(255, 255, 255, 0.25);
-}
-
 .search-area {
     display: flex;
     flex-direction: column;
