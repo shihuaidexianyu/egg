@@ -1,7 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { ChangeEvent, KeyboardEvent as InputKeyboardEvent } from "react";
 import { invoke } from "@tauri-apps/api/core";
-import { getCurrentWindow } from "@tauri-apps/api/window";
 import { getVersion } from "@tauri-apps/api/app";
 import type { AppSettings } from "../types";
 import { Toast } from "./Toast";
@@ -87,11 +86,6 @@ export const SettingsWindow = () => {
 
     const toggleBoolean = useCallback((key: BooleanSettingKey) => {
         setDraft((prev) => (prev ? { ...prev, [key]: !prev[key] } : prev));
-    }, []);
-
-    const handleClose = useCallback(async () => {
-        const windowRef = getCurrentWindow();
-        await windowRef.close();
     }, []);
 
     const isDirty = useMemo(() => {
@@ -193,7 +187,6 @@ export const SettingsWindow = () => {
                     <header className="settings-card__header">
                         <div>
                             <p className="settings-card__title">全局快捷键</p>
-                            <p className="settings-card__subtitle">Flow Launcher 同款 Alt+Space 唤起体验</p>
                         </div>
                         <span className="settings-chip">前台</span>
                     </header>
@@ -268,7 +261,6 @@ export const SettingsWindow = () => {
                     <header className="settings-card__header">
                         <div>
                             <p className="settings-card__title">结果来源</p>
-                            <p className="settings-card__subtitle">与 Flow Launcher 一样可按来源切换</p>
                         </div>
                     </header>
                     <div className="settings-toggle-group">
@@ -424,12 +416,9 @@ export const SettingsWindow = () => {
         <div className="settings-window">
             <header className="settings-window__header" data-tauri-drag-region>
                 <div>
-                    <h1 className="settings-window__title">Flow 风格设置</h1>
+                    <h1 className="settings-window__title">设置</h1>
                     <p className="settings-window__subtitle">管理 RustLauncher 的快捷键、搜索与外观</p>
                 </div>
-                <button type="button" className="ghost-button" onClick={() => void handleClose()}>
-                    关闭
-                </button>
             </header>
             <div className="settings-shell">
                 <nav className="settings-sidebar">
