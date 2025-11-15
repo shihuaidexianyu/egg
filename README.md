@@ -1,5 +1,7 @@
 # RustLauncher 启动器
 
+参考Flow.Launcher的实现逻辑
+
 基于 **Tauri 2 + React + TypeScript** 的轻量级启动器，目标是提供类似 Flow Launcher 的体验：
 
 - `Alt+Space` 一键唤出/隐藏窗口
