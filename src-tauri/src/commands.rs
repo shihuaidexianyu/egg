@@ -2,6 +2,7 @@ use std::{collections::HashMap, path::Path, process::Command, sync::Arc};
 
 use fuzzy_matcher::skim::SkimMatcherV2;
 use fuzzy_matcher::FuzzyMatcher;
+use serde::Deserialize;
 use tauri::{AppHandle, Emitter, Manager, State};
 use tauri_plugin_opener::OpenerExt;
 use windows::{
@@ -23,11 +24,23 @@ use crate::{
     state::{AppState, PendingAction},
 };
 
-const DEFAULT_RESULT_LIMIT: usize = 40;
 const MIN_QUERY_DELAY_MS: u64 = 50;
 const MAX_QUERY_DELAY_MS: u64 = 2000;
+const MIN_RESULT_LIMIT: u32 = 10;
+const MAX_RESULT_LIMIT: u32 = 60;
 pub const HIDE_WINDOW_EVENT: &str = "hide_window";
 pub const OPEN_SETTINGS_EVENT: &str = "open_settings";
+pub const SETTINGS_UPDATED_EVENT: &str = "settings_updated";
+
+#[derive(Debug, Default, Deserialize)]
+pub struct SettingsUpdatePayload {
+    pub global_hotkey: Option<String>,
+    pub query_delay_ms: Option<u64>,
+    pub max_results: Option<u32>,
+    pub enable_preview_panel: Option<bool>,
+    pub enable_app_results: Option<bool>,
+    pub enable_bookmark_results: Option<bool>,
+}
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum QueryMode {
@@ -70,6 +83,19 @@ pub fn submit_query(
     }
 
     let query_mode = QueryMode::from_option(mode);
+    let config_snapshot = state
+        .config
+        .lock()
+        .map(|cfg| cfg.clone())
+        .unwrap_or_default();
+    let include_apps = config_snapshot.enable_app_results;
+    let include_bookmarks = config_snapshot.enable_bookmark_results;
+    let mut result_limit = config_snapshot
+        .max_results
+        .clamp(MIN_RESULT_LIMIT, MAX_RESULT_LIMIT) as usize;
+    if result_limit == 0 {
+        result_limit = MIN_RESULT_LIMIT as usize;
+    }
 
     let mut results = Vec::new();
     let mut counter = 0usize;
@@ -90,7 +116,7 @@ pub fn submit_query(
     }
 
     let matcher = SkimMatcherV2::default();
-    let apps = if query_mode.allows_applications() {
+    let apps = if query_mode.allows_applications() && include_apps {
         Some(
             state
                 .app_index
@@ -101,7 +127,7 @@ pub fn submit_query(
     } else {
         None
     };
-    let bookmarks = if query_mode.allows_bookmarks() {
+    let bookmarks = if query_mode.allows_bookmarks() && include_bookmarks {
         Some(
             state
                 .bookmark_index
@@ -162,10 +188,10 @@ pub fn submit_query(
     }
 
     results.sort_by(|a, b| b.score.cmp(&a.score));
-    if DEFAULT_RESULT_LIMIT > 1 && results.len() >= DEFAULT_RESULT_LIMIT {
-        results.truncate(DEFAULT_RESULT_LIMIT - 1);
+    if result_limit > 1 && results.len() >= result_limit {
+        results.truncate(result_limit - 1);
     } else {
-        results.truncate(DEFAULT_RESULT_LIMIT);
+        results.truncate(result_limit);
     }
 
     let search_id = format!("search-{counter}");
@@ -264,32 +290,82 @@ pub fn get_settings(state: State<'_, AppState>) -> AppConfig {
 }
 
 #[tauri::command]
+pub fn update_settings(
+    updates: SettingsUpdatePayload,
+    app_handle: AppHandle,
+    state: State<'_, AppState>,
+) -> Result<AppConfig, String> {
+    let mut guard = state
+        .config
+        .lock()
+        .map_err(|_| "无法获取配置".to_string())?;
+
+    if let Some(hotkey) = updates.global_hotkey {
+        let normalized = hotkey.trim();
+        if normalized.is_empty() {
+            return Err("快捷键不能为空".into());
+        }
+        if normalized != guard.global_hotkey {
+            bind_hotkey(&app_handle, &state, normalized, "main")?;
+            guard.global_hotkey = normalized.to_string();
+        }
+    }
+
+    if updates.query_delay_ms.is_some() {
+        guard.query_delay_ms = normalize_query_delay(updates.query_delay_ms, guard.query_delay_ms);
+    }
+
+    if updates.max_results.is_some() {
+        guard.max_results = normalize_max_results(updates.max_results, guard.max_results);
+    }
+
+    if let Some(value) = updates.enable_preview_panel {
+        guard.enable_preview_panel = value;
+    }
+
+    if let Some(value) = updates.enable_app_results {
+        guard.enable_app_results = value;
+    }
+
+    if let Some(value) = updates.enable_bookmark_results {
+        guard.enable_bookmark_results = value;
+    }
+
+    guard.save(&app_handle)?;
+    let snapshot = guard.clone();
+    let _ = app_handle.emit(SETTINGS_UPDATED_EVENT, snapshot.clone());
+    Ok(snapshot)
+}
+
+#[tauri::command]
 pub fn update_hotkey(
     hotkey: String,
     query_delay_ms: Option<u64>,
     app_handle: AppHandle,
     state: State<'_, AppState>,
 ) -> Result<AppConfig, String> {
-    let normalized = hotkey.trim();
-    if normalized.is_empty() {
-        return Err("快捷键不能为空".into());
-    }
-
-    bind_hotkey(&app_handle, &state, normalized, "main")?;
-
-    let mut guard = state
-        .config
-        .lock()
-        .map_err(|_| "无法获取配置".to_string())?;
-    guard.global_hotkey = normalized.to_string();
-    guard.query_delay_ms = normalize_query_delay(query_delay_ms, guard.query_delay_ms);
-    guard.save(&app_handle)?;
-    Ok(guard.clone())
+    update_settings(
+        SettingsUpdatePayload {
+            global_hotkey: Some(hotkey),
+            query_delay_ms,
+            max_results: None,
+            enable_preview_panel: None,
+            enable_app_results: None,
+            enable_bookmark_results: None,
+        },
+        app_handle,
+        state,
+    )
 }
 
 fn normalize_query_delay(candidate: Option<u64>, current: u64) -> u64 {
     let value = candidate.unwrap_or(current);
     value.clamp(MIN_QUERY_DELAY_MS, MAX_QUERY_DELAY_MS)
+}
+
+fn normalize_max_results(candidate: Option<u32>, current: u32) -> u32 {
+    let value = candidate.unwrap_or(current);
+    value.clamp(MIN_RESULT_LIMIT, MAX_RESULT_LIMIT)
 }
 
 fn open_url(app_handle: &AppHandle, target: &str) -> Result<(), String> {

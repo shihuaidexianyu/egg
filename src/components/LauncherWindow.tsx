@@ -22,7 +22,7 @@ import { ResultList } from "./ResultList";
 import { PreviewPane } from "./PreviewPane";
 import { Toast } from "./Toast";
 import { MODE_LIST, MODE_CONFIGS, detectModeFromInput } from "../constants/modes";
-import { HIDE_WINDOW_EVENT, OPEN_SETTINGS_EVENT } from "../constants/events";
+import { HIDE_WINDOW_EVENT, OPEN_SETTINGS_EVENT, SETTINGS_UPDATED_EVENT } from "../constants/events";
 import { initialLauncherState, launcherReducer } from "../state/launcherReducer";
 import type { AppSettings, ModeConfig, SearchResult } from "../types";
 import { pickFallbackIcon } from "../utils/fallbackIcon";
@@ -117,6 +117,32 @@ export const LauncherWindow = () => {
 
     useEffect(() => {
         void loadSettings();
+    }, [loadSettings]);
+
+    useEffect(() => {
+        let unlisten: UnlistenFn | undefined;
+
+        const register = async () => {
+            try {
+                unlisten = await listen<AppSettings>(SETTINGS_UPDATED_EVENT, (event) => {
+                    if (event.payload) {
+                        dispatch({ type: "SET_SETTINGS", payload: event.payload });
+                    } else {
+                        void loadSettings();
+                    }
+                });
+            } catch (error) {
+                console.error("Failed to listen settings update", error);
+            }
+        };
+
+        void register();
+
+        return () => {
+            if (unlisten) {
+                unlisten();
+            }
+        };
     }, [loadSettings]);
 
     useEffect(() => {
@@ -332,6 +358,8 @@ export const LauncherWindow = () => {
     const fallbackVisual = activeResult ? pickFallbackIcon(activeResult) : null;
     const activeResultTag = activeResult ? resolveResultTag(activeResult) : null;
     const disableNav = resultsCount <= 1;
+    const showPreviewPane = state.settings?.enable_preview_panel ?? true;
+    const contentAreaClassName = showPreviewPane ? "content-area" : "content-area content-area--single";
 
     return (
         <div className="flow-window" data-tauri-drag-region>
@@ -382,7 +410,7 @@ export const LauncherWindow = () => {
                     />
                 )}
             </section>
-            <section className="content-area">
+            <section className={contentAreaClassName}>
                 <div className="results-panel">
                     {hasMatches ? (
                         <ResultList
@@ -410,19 +438,35 @@ export const LauncherWindow = () => {
                         </span>
                     </div>
                 </div>
-                <PreviewPane
-                    result={activeResult}
-                    fallbackVisual={fallbackVisual}
-                    tagLabel={activeResultTag}
-                    onPrev={() => stepSelection(-1)}
-                    onNext={() => stepSelection(1)}
-                    onExecute={() => {
-                        if (activeResult) {
-                            void executeSelected(activeResult);
-                        }
-                    }}
-                    disableNavigation={disableNav}
-                />
+                {showPreviewPane ? (
+                    <PreviewPane
+                        result={activeResult}
+                        fallbackVisual={fallbackVisual}
+                        tagLabel={activeResultTag}
+                        onPrev={() => stepSelection(-1)}
+                        onNext={() => stepSelection(1)}
+                        onExecute={() => {
+                            if (activeResult) {
+                                void executeSelected(activeResult);
+                            }
+                        }}
+                        disableNavigation={disableNav}
+                    />
+                ) : (
+                    <div className="preview-panel preview-panel--ghost">
+                        <div className="preview-placeholder">
+                            <div className="preview-title">预览面板已隐藏</div>
+                            <div className="preview-subtitle">前往 设置 → 外观 可重新启用</div>
+                            <button
+                                type="button"
+                                className="ghost-button"
+                                onClick={handleSettingsButtonClick}
+                            >
+                                打开设置
+                            </button>
+                        </div>
+                    </div>
+                )}
             </section>
             {state.toastMessage ? <Toast message={state.toastMessage} /> : null}
         </div>

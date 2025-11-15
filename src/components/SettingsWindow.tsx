@@ -1,16 +1,43 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { ChangeEvent, KeyboardEvent as InputKeyboardEvent } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { getCurrentWindow } from "@tauri-apps/api/window";
+import { getVersion } from "@tauri-apps/api/app";
 import type { AppSettings } from "../types";
 import { Toast } from "./Toast";
 
+const MIN_QUERY_DELAY = 50;
+const MAX_QUERY_DELAY = 2000;
+const MIN_RESULT_LIMIT = 10;
+const MAX_RESULT_LIMIT = 60;
+
+type SettingsSectionId = "general" | "search" | "appearance" | "about";
+
+const SECTION_DEFS: Array<{ id: SettingsSectionId; label: string; description: string; icon: string }> = [
+    { id: "general", label: "常规", description: "呼出快捷键 & 防抖", icon: "⌘" },
+    { id: "search", label: "搜索", description: "结果来源 / 数量", icon: "🔍" },
+    { id: "appearance", label: "外观", description: "Flow 风格预览", icon: "✨" },
+    { id: "about", label: "关于", description: "版本与状态", icon: "ℹ️" },
+];
+
+type BooleanSettingKey = "enable_preview_panel" | "enable_app_results" | "enable_bookmark_results";
+
+const TRACKED_SETTING_KEYS: Array<keyof AppSettings> = [
+    "global_hotkey",
+    "query_delay_ms",
+    "max_results",
+    "enable_preview_panel",
+    "enable_app_results",
+    "enable_bookmark_results",
+];
+
 export const SettingsWindow = () => {
     const [settings, setSettings] = useState<AppSettings | null>(null);
-    const [hotkeyInput, setHotkeyInput] = useState("");
-    const [queryDelayInput, setQueryDelayInput] = useState("");
+    const [draft, setDraft] = useState<AppSettings | null>(null);
+    const [activeSection, setActiveSection] = useState<SettingsSectionId>("general");
     const [isSaving, setIsSaving] = useState(false);
     const [toastMessage, setToastMessage] = useState<string | null>(null);
+    const [appVersion, setAppVersion] = useState("--");
     const hotkeyInputRef = useRef<HTMLInputElement | null>(null);
     const toastTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
@@ -29,8 +56,7 @@ export const SettingsWindow = () => {
         try {
             const appSettings = await invoke<AppSettings>("get_settings");
             setSettings(appSettings);
-            setHotkeyInput(appSettings.global_hotkey);
-            setQueryDelayInput(String(appSettings.query_delay_ms));
+            setDraft({ ...appSettings });
         } catch (error) {
             console.error("Failed to load settings", error);
             showToast("加载设置失败");
@@ -39,6 +65,7 @@ export const SettingsWindow = () => {
 
     useEffect(() => {
         void loadSettings();
+        void getVersion().then(setAppVersion).catch(console.error);
         return () => {
             if (toastTimerRef.current) {
                 window.clearTimeout(toastTimerRef.current);
@@ -47,50 +74,65 @@ export const SettingsWindow = () => {
     }, [loadSettings]);
 
     useEffect(() => {
-        if (hotkeyInputRef.current) {
+        if (hotkeyInputRef.current && draft) {
             hotkeyInputRef.current.focus();
             hotkeyInputRef.current.select();
         }
-    }, [settings]);
+    }, [draft]);
+
+    const updateDraftValue = useCallback(<K extends keyof AppSettings>(key: K, value: AppSettings[K]) => {
+        setDraft((prev) => (prev ? { ...prev, [key]: value } : prev));
+    }, []);
+
+    const toggleBoolean = useCallback((key: BooleanSettingKey) => {
+        setDraft((prev) => (prev ? { ...prev, [key]: !prev[key] } : prev));
+    }, []);
 
     const handleClose = useCallback(async () => {
         const windowRef = getCurrentWindow();
         await windowRef.close();
     }, []);
 
+    const isDirty = useMemo(() => {
+        if (!settings || !draft) {
+            return false;
+        }
+        return TRACKED_SETTING_KEYS.some((key) => settings[key] !== draft[key]);
+    }, [settings, draft]);
+
+    const validationMessage = useMemo(() => {
+        if (!draft) {
+            return "正在加载设置";
+        }
+        if (!draft.global_hotkey.trim()) {
+            return "快捷键不能为空";
+        }
+        if (draft.query_delay_ms < MIN_QUERY_DELAY || draft.query_delay_ms > MAX_QUERY_DELAY) {
+            return `延迟需在 ${MIN_QUERY_DELAY}~${MAX_QUERY_DELAY}ms 之间`;
+        }
+        if (draft.max_results < MIN_RESULT_LIMIT || draft.max_results > MAX_RESULT_LIMIT) {
+            return `结果数量需在 ${MIN_RESULT_LIMIT}~${MAX_RESULT_LIMIT} 条之间`;
+        }
+        if (!draft.enable_app_results && !draft.enable_bookmark_results) {
+            return "至少保留一个结果来源";
+        }
+        return null;
+    }, [draft]);
+
     const handleSettingsSave = useCallback(async () => {
-        const trimmedHotkey = hotkeyInput.trim();
-        if (!trimmedHotkey) {
-            showToast("快捷键不能为空");
+        if (!draft) {
             return;
         }
-
-        const trimmedDelay = queryDelayInput.trim();
-        if (!trimmedDelay) {
-            showToast("延迟不能为空");
-            return;
-        }
-
-        const parsedDelay = Number(trimmedDelay);
-        if (!Number.isFinite(parsedDelay)) {
-            showToast("请输入有效的延迟毫秒数");
-            return;
-        }
-
-        if (parsedDelay < 50 || parsedDelay > 2000) {
-            showToast("延迟需在 50~2000ms 之间");
+        if (validationMessage) {
+            showToast(validationMessage);
             return;
         }
 
         try {
             setIsSaving(true);
-            const updated = await invoke<AppSettings>("update_hotkey", {
-                hotkey: trimmedHotkey,
-                query_delay_ms: Math.round(parsedDelay),
-            });
+            const updated = await invoke<AppSettings>("update_settings", { updates: draft });
             setSettings(updated);
-            setHotkeyInput(updated.global_hotkey);
-            setQueryDelayInput(String(updated.query_delay_ms));
+            setDraft({ ...updated });
             showToast("设置已更新");
         } catch (error) {
             console.error("Failed to update settings", error);
@@ -98,7 +140,7 @@ export const SettingsWindow = () => {
         } finally {
             setIsSaving(false);
         }
-    }, [hotkeyInput, queryDelayInput, showToast]);
+    }, [draft, showToast, validationMessage]);
 
     const handleKeyDown = useCallback(
         (event: InputKeyboardEvent<HTMLInputElement>) => {
@@ -110,77 +152,284 @@ export const SettingsWindow = () => {
         [handleSettingsSave],
     );
 
+    const handleReset = useCallback(() => {
+        if (settings) {
+            setDraft({ ...settings });
+            setActiveSection("general");
+            showToast("已恢复保存的配置");
+        }
+    }, [settings, showToast]);
+
+    const renderPlaceholder = () => (
+        <div className="settings-loading">正在载入 Flow 风格设置...</div>
+    );
+
+    const renderGeneralSection = () => {
+        if (!draft) {
+            return renderPlaceholder();
+        }
+
+        return (
+            <div className="settings-section">
+                <article className="settings-card">
+                    <header className="settings-card__header">
+                        <div>
+                            <p className="settings-card__title">全局快捷键</p>
+                            <p className="settings-card__subtitle">Flow Launcher 同款 Alt+Space 唤起体验</p>
+                        </div>
+                        <span className="settings-chip">前台</span>
+                    </header>
+                    <div className="settings-input-row">
+                        <input
+                            ref={hotkeyInputRef}
+                            type="text"
+                            value={draft.global_hotkey}
+                            onChange={(event: ChangeEvent<HTMLInputElement>) =>
+                                updateDraftValue("global_hotkey", event.currentTarget.value)
+                            }
+                            onKeyDown={handleKeyDown}
+                            className="settings-input"
+                            placeholder="例如 Alt+Space"
+                        />
+                        <span className="settings-hint">用 "+" 连接组合键，如 Ctrl+Shift+P</span>
+                    </div>
+                </article>
+                <article className="settings-card">
+                    <header className="settings-card__header">
+                        <div>
+                            <p className="settings-card__title">搜索防抖</p>
+                            <p className="settings-card__subtitle">避免过于频繁的调用，保持顺滑体验</p>
+                        </div>
+                        <span className="settings-chip">{draft.query_delay_ms} ms</span>
+                    </header>
+                    <div className="settings-slider">
+                        <input
+                            type="range"
+                            min={MIN_QUERY_DELAY}
+                            max={MAX_QUERY_DELAY}
+                            step={10}
+                            value={draft.query_delay_ms}
+                            onChange={(event: ChangeEvent<HTMLInputElement>) =>
+                                updateDraftValue("query_delay_ms", Number(event.currentTarget.value))
+                            }
+                        />
+                        <div className="settings-slider__scale">
+                            <span>{MIN_QUERY_DELAY}ms</span>
+                            <span>{MAX_QUERY_DELAY}ms</span>
+                        </div>
+                    </div>
+                    <div className="settings-number">
+                        <input
+                            type="number"
+                            min={MIN_QUERY_DELAY}
+                            max={MAX_QUERY_DELAY}
+                            step={10}
+                            value={draft.query_delay_ms}
+                            onChange={(event: ChangeEvent<HTMLInputElement>) =>
+                                updateDraftValue(
+                                    "query_delay_ms",
+                                    Number(event.currentTarget.value || draft.query_delay_ms),
+                                )
+                            }
+                        />
+                        <span className="settings-hint">范围 {MIN_QUERY_DELAY}~{MAX_QUERY_DELAY} ms</span>
+                    </div>
+                </article>
+            </div>
+        );
+    };
+
+    const renderSearchSection = () => {
+        if (!draft) {
+            return renderPlaceholder();
+        }
+
+        return (
+            <div className="settings-section">
+                <article className="settings-card">
+                    <header className="settings-card__header">
+                        <div>
+                            <p className="settings-card__title">结果来源</p>
+                            <p className="settings-card__subtitle">与 Flow Launcher 一样可按来源切换</p>
+                        </div>
+                    </header>
+                    <div className="settings-toggle-group">
+                        <button
+                            type="button"
+                            className={`settings-toggle ${draft.enable_app_results ? "on" : "off"}`}
+                            onClick={() => toggleBoolean("enable_app_results")}
+                        >
+                            <span className="toggle-pill" aria-hidden="true" />
+                            <div>
+                                <div className="toggle-title">包含应用</div>
+                                <div className="toggle-subtitle">检索 Win32 / UWP 程序</div>
+                            </div>
+                        </button>
+                        <button
+                            type="button"
+                            className={`settings-toggle ${draft.enable_bookmark_results ? "on" : "off"}`}
+                            onClick={() => toggleBoolean("enable_bookmark_results")}
+                        >
+                            <span className="toggle-pill" aria-hidden="true" />
+                            <div>
+                                <div className="toggle-title">包含书签</div>
+                                <div className="toggle-subtitle">同步 Chrome 收藏夹</div>
+                            </div>
+                        </button>
+                    </div>
+                </article>
+                <article className="settings-card">
+                    <header className="settings-card__header">
+                        <div>
+                            <p className="settings-card__title">结果数量上限</p>
+                            <p className="settings-card__subtitle">配合虚拟列表，最多 {MAX_RESULT_LIMIT} 条</p>
+                        </div>
+                        <span className="settings-chip">{draft.max_results} 条</span>
+                    </header>
+                    <div className="settings-slider">
+                        <input
+                            type="range"
+                            min={MIN_RESULT_LIMIT}
+                            max={MAX_RESULT_LIMIT}
+                            step={1}
+                            value={draft.max_results}
+                            onChange={(event: ChangeEvent<HTMLInputElement>) =>
+                                updateDraftValue("max_results", Number(event.currentTarget.value))
+                            }
+                        />
+                        <div className="settings-slider__scale">
+                            <span>{MIN_RESULT_LIMIT} 条</span>
+                            <span>{MAX_RESULT_LIMIT} 条</span>
+                        </div>
+                    </div>
+                </article>
+            </div>
+        );
+    };
+
+    const renderAppearanceSection = () => {
+        if (!draft) {
+            return renderPlaceholder();
+        }
+
+        return (
+            <div className="settings-section">
+                <article className="settings-card">
+                    <header className="settings-card__header">
+                        <div>
+                            <p className="settings-card__title">预览面板</p>
+                            <p className="settings-card__subtitle">Flow Launcher 风格的右侧详情</p>
+                        </div>
+                        <span className="settings-chip">UI</span>
+                    </header>
+                    <div className="settings-toggle-group">
+                        <button
+                            type="button"
+                            className={`settings-toggle ${draft.enable_preview_panel ? "on" : "off"}`}
+                            onClick={() => toggleBoolean("enable_preview_panel")}
+                        >
+                            <span className="toggle-pill" aria-hidden="true" />
+                            <div>
+                                <div className="toggle-title">显示预览边栏</div>
+                                <div className="toggle-subtitle">关闭后仅保留列表，适合极简模式</div>
+                            </div>
+                        </button>
+                    </div>
+                </article>
+            </div>
+        );
+    };
+
+    const renderAboutSection = () => {
+        const summary = draft ?? settings;
+        return (
+            <div className="settings-section settings-section--grid">
+                <div className="about-card">
+                    <div className="about-label">版本</div>
+                    <div className="about-value">{appVersion}</div>
+                </div>
+                <div className="about-card">
+                    <div className="about-label">快捷键</div>
+                    <div className="about-value">{summary?.global_hotkey ?? "--"}</div>
+                </div>
+                <div className="about-card">
+                    <div className="about-label">延迟</div>
+                    <div className="about-value">{summary ? `${summary.query_delay_ms} ms` : "--"}</div>
+                </div>
+                <div className="about-card">
+                    <div className="about-label">结果上限</div>
+                    <div className="about-value">{summary ? `${summary.max_results} 条` : "--"}</div>
+                </div>
+            </div>
+        );
+    };
+
+    const renderSection = () => {
+        switch (activeSection) {
+            case "general":
+                return renderGeneralSection();
+            case "search":
+                return renderSearchSection();
+            case "appearance":
+                return renderAppearanceSection();
+            case "about":
+                return renderAboutSection();
+            default:
+                return null;
+        }
+    };
+
     return (
         <div className="settings-window">
             <header className="settings-window__header" data-tauri-drag-region>
                 <div>
-                    <h1 className="settings-window__title">RustLauncher 设置</h1>
-                    <p className="settings-window__subtitle">配置全局唤起与搜索体验</p>
+                    <h1 className="settings-window__title">Flow 风格设置</h1>
+                    <p className="settings-window__subtitle">管理 RustLauncher 的快捷键、搜索与外观</p>
                 </div>
                 <button type="button" className="ghost-button" onClick={() => void handleClose()}>
                     关闭
                 </button>
             </header>
-            <section className="settings-window__content">
-                <div className="settings-field">
-                    <label htmlFor="hotkey-input">全局快捷键</label>
-                    <input
-                        id="hotkey-input"
-                        type="text"
-                        ref={hotkeyInputRef}
-                        value={hotkeyInput}
-                        onChange={(event: ChangeEvent<HTMLInputElement>) =>
-                            setHotkeyInput(event.currentTarget.value)
-                        }
-                        onKeyDown={handleKeyDown}
-                        placeholder="例如 Alt+Space"
-                        className="settings-input"
-                    />
-                    <span className="settings-hint">用 + 连接组合键，例如 Ctrl+Shift+P</span>
-                </div>
-                <div className="settings-field">
-                    <label htmlFor="query-delay-input">匹配延迟 (毫秒)</label>
-                    <input
-                        id="query-delay-input"
-                        type="number"
-                        min={50}
-                        max={2000}
-                        step={10}
-                        value={queryDelayInput}
-                        onChange={(event: ChangeEvent<HTMLInputElement>) =>
-                            setQueryDelayInput(event.currentTarget.value)
-                        }
-                        onKeyDown={handleKeyDown}
-                        placeholder="例如 120"
-                        className="settings-input"
-                    />
-                    <span className="settings-hint">控制搜索防抖延迟，范围 50~2000 毫秒</span>
-                </div>
-            </section>
+            <div className="settings-shell">
+                <nav className="settings-sidebar">
+                    {SECTION_DEFS.map((section) => (
+                        <button
+                            key={section.id}
+                            type="button"
+                            className={`settings-nav__item ${activeSection === section.id ? "active" : ""}`}
+                            onClick={() => setActiveSection(section.id)}
+                        >
+                            <span className="settings-nav__icon" aria-hidden="true">
+                                {section.icon}
+                            </span>
+                            <span>
+                                <span className="settings-nav__label">{section.label}</span>
+                                <span className="settings-nav__desc">{section.description}</span>
+                            </span>
+                        </button>
+                    ))}
+                </nav>
+                <section className="settings-panel">{renderSection()}</section>
+            </div>
             <footer className="settings-window__footer">
-                <button type="button" className="ghost-button" onClick={() => void loadSettings()}>
-                    重置
-                </button>
-                <button
-                    type="button"
-                    className="primary-button"
-                    onClick={() => void handleSettingsSave()}
-                    disabled={isSaving}
-                >
-                    {isSaving ? "保存中..." : "保存"}
-                </button>
+                <div className="settings-footer__status">
+                    {validationMessage ?? (isDirty ? "有更改尚未保存" : "配置已同步")}
+                </div>
+                <div className="settings-footer__actions">
+                    <button type="button" className="ghost-button" onClick={handleReset}>
+                        恢复已保存
+                    </button>
+                    <button
+                        type="button"
+                        className="primary-button"
+                        onClick={() => void handleSettingsSave()}
+                        disabled={!isDirty || !!validationMessage || isSaving}
+                    >
+                        {isSaving ? "保存中..." : "保存更改"}
+                    </button>
+                </div>
             </footer>
             {toastMessage ? <Toast message={toastMessage} /> : null}
-            <dl className="settings-window__meta">
-                <div>
-                    <dt>当前快捷键</dt>
-                    <dd>{settings?.global_hotkey ?? "加载中..."}</dd>
-                </div>
-                <div>
-                    <dt>当前延迟</dt>
-                    <dd>{settings ? `${settings.query_delay_ms} ms` : "加载中..."}</dd>
-                </div>
-            </dl>
         </div>
     );
 };

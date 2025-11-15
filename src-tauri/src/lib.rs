@@ -9,7 +9,8 @@ mod text_utils;
 mod windows_utils;
 
 use commands::{
-    execute_action, get_settings, submit_query, trigger_reindex, update_hotkey, OPEN_SETTINGS_EVENT,
+    execute_action, get_settings, submit_query, trigger_reindex, update_hotkey, update_settings,
+    OPEN_SETTINGS_EVENT,
 };
 use config::AppConfig;
 use hotkey::bind_hotkey;
@@ -35,7 +36,8 @@ pub fn run() {
             execute_action,
             trigger_reindex,
             get_settings,
-            update_hotkey
+            update_hotkey,
+            update_settings
         ])
         .setup(|app| {
             let handle = app.handle();
