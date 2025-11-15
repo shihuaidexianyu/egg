@@ -171,7 +171,7 @@ fn sanitize_executable_path(raw: &str) -> Option<String> {
         return None;
     }
 
-    let without_quotes = trimmed.trim_matches('"');
+    let without_quotes = trimmed.trim_matches(|c| c == '"' || c == '\'');
     let candidate = without_quotes
         .split(&[',', ';'][..])
         .next()
@@ -181,10 +181,9 @@ fn sanitize_executable_path(raw: &str) -> Option<String> {
     }
 
     let expanded = expand_env_vars(candidate).unwrap_or_else(|| candidate.to_string());
-    let normalized = expanded.replace("\\\\", "\\");
-    let path = Path::new(&normalized);
+    let path = Path::new(&expanded);
     if path.is_file() {
-        Some(normalized)
+        Some(expanded)
     } else {
         None
     }

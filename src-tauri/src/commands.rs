@@ -1,4 +1,4 @@
-use std::sync::Arc;
+use std::{collections::HashMap, path::Path, process::Command, sync::Arc};
 
 use fuzzy_matcher::skim::SkimMatcherV2;
 use fuzzy_matcher::FuzzyMatcher;
@@ -20,7 +20,7 @@ use crate::{
     hotkey::bind_hotkey,
     indexer,
     models::{AppType, ApplicationInfo, SearchResult},
-    state::AppState,
+    state::{AppState, PendingAction},
 };
 
 const DEFAULT_RESULT_LIMIT: usize = 8;
@@ -73,16 +73,18 @@ pub fn submit_query(
 
     let mut results = Vec::new();
     let mut counter = 0usize;
+    let mut pending_actions: HashMap<String, PendingAction> = HashMap::new();
 
     if is_url_like(trimmed) {
+        let result_id = format!("url-{counter}");
+        pending_actions.insert(result_id.clone(), PendingAction::Url(trimmed.to_string()));
         results.push(SearchResult {
-            id: format!("url-{counter}"),
+            id: result_id,
             title: format!("打开网址: {trimmed}"),
             subtitle: trimmed.to_string(),
             icon: String::new(),
             score: 200,
             action_id: "url".to_string(),
-            action_payload: trimmed.to_string(),
         });
         counter += 1;
     }
@@ -115,8 +117,10 @@ pub fn submit_query(
         for app in apps.iter() {
             if let Some(score) = match_application(&matcher, app, trimmed) {
                 counter += 1;
+                let result_id = format!("app-{}", app.id);
+                pending_actions.insert(result_id.clone(), PendingAction::Application(app.clone()));
                 results.push(SearchResult {
-                    id: format!("app-{}", app.id),
+                    id: result_id,
                     title: app.name.clone(),
                     subtitle: app
                         .description
@@ -129,7 +133,6 @@ pub fn submit_query(
                         AppType::Win32 => "app".to_string(),
                         AppType::Uwp => "uwp".to_string(),
                     },
-                    action_payload: app.path.clone(),
                 });
             }
         }
@@ -143,14 +146,16 @@ pub fn submit_query(
                     Some(path) => format!("收藏夹 · {path} · {}", bookmark.url),
                     None => format!("收藏夹 · {}", bookmark.url),
                 };
+                let result_id = format!("bookmark-{}", bookmark.id);
+                pending_actions
+                    .insert(result_id.clone(), PendingAction::Bookmark(bookmark.clone()));
                 results.push(SearchResult {
-                    id: format!("bookmark-{}", bookmark.id),
+                    id: result_id,
                     title: bookmark.title.clone(),
                     subtitle,
                     icon: String::new(),
                     score,
                     action_id: "bookmark".to_string(),
-                    action_payload: bookmark.url.clone(),
                 });
             }
         }
@@ -163,18 +168,27 @@ pub fn submit_query(
         results.truncate(DEFAULT_RESULT_LIMIT);
     }
 
+    let search_id = format!("search-{counter}");
+    let search_url = format!(
+        "https://google.com/search?q={}",
+        urlencoding::encode(trimmed)
+    );
+    pending_actions.insert(search_id.clone(), PendingAction::Search(search_url.clone()));
     results.push(SearchResult {
-        id: format!("search-{counter}"),
+        id: search_id,
         title: format!("在 Google 上搜索: {trimmed}"),
         subtitle: String::from("Google 搜索"),
         icon: String::new(),
         score: i64::MIN,
         action_id: "search".to_string(),
-        action_payload: format!(
-            "https://google.com/search?q={}",
-            urlencoding::encode(trimmed)
-        ),
     });
+
+    if let Ok(mut guard) = state.pending_actions.lock() {
+        guard.clear();
+        guard.extend(pending_actions);
+    } else {
+        log::warn!("无法记录搜索结果缓存，可能导致执行失败");
+    }
 
     results
 }
@@ -182,20 +196,28 @@ pub fn submit_query(
 #[tauri::command]
 pub async fn execute_action(
     id: String,
-    payload: String,
     app_handle: AppHandle,
+    state: State<'_, AppState>,
 ) -> Result<(), String> {
-    match id.as_str() {
-        "app" => launch_win32_app(&payload)?,
-        "uwp" => launch_uwp_app(&payload)?,
-        "url" | "search" | "bookmark" => {
-            app_handle
-                .opener()
-                .open_url(payload.clone(), Option::<&str>::None)
-                .map_err(|err| err.to_string())?;
-        }
-        _ => {
-            log::warn!("未知的 action id: {id}");
+    let action = {
+        let guard = state
+            .pending_actions
+            .lock()
+            .map_err(|_| "无法访问待执行队列".to_string())?;
+        guard
+            .get(&id)
+            .cloned()
+            .ok_or_else(|| "结果已失效，请重新搜索".to_string())?
+    };
+
+    match action {
+        PendingAction::Application(app) => match app.app_type {
+            AppType::Win32 => launch_win32_app(&app)?,
+            AppType::Uwp => launch_uwp_app(&app.path)?,
+        },
+        PendingAction::Bookmark(entry) => open_url(&app_handle, &entry.url)?,
+        PendingAction::Url(url) | PendingAction::Search(url) => {
+            open_url(&app_handle, &url)?;
         }
     }
 
@@ -270,12 +292,25 @@ fn normalize_query_delay(candidate: Option<u64>, current: u64) -> u64 {
     value.clamp(MIN_QUERY_DELAY_MS, MAX_QUERY_DELAY_MS)
 }
 
-fn launch_win32_app(path: &str) -> Result<(), String> {
-    std::process::Command::new("cmd")
-        .args(["/C", "start", "", path])
-        .spawn()
-        .map(|_| ())
+fn open_url(app_handle: &AppHandle, target: &str) -> Result<(), String> {
+    app_handle
+        .opener()
+        .open_url(target.to_string(), Option::<&str>::None)
         .map_err(|err| err.to_string())
+}
+
+fn launch_win32_app(app: &ApplicationInfo) -> Result<(), String> {
+    let path = Path::new(&app.path);
+    if !path.exists() {
+        return Err("目标程序不存在或已被移动".into());
+    }
+
+    let mut command = Command::new(path);
+    if let Some(parent) = path.parent() {
+        command.current_dir(parent);
+    }
+
+    command.spawn().map(|_| ()).map_err(|err| err.to_string())
 }
 
 fn launch_uwp_app(app_id: &str) -> Result<(), String> {

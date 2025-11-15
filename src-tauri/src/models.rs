@@ -25,5 +25,4 @@ pub struct SearchResult {
     pub icon: String,
     pub score: i64,
     pub action_id: String,
-    pub action_payload: String,
 }

@@ -17,7 +17,6 @@ type SearchResult = {
   icon: string;
   score: number;
   action_id: string;
-  action_payload: string;
 };
 
 type AppSettings = {
@@ -364,8 +363,7 @@ function App() {
 
       try {
         await invoke("execute_action", {
-          id: selected.action_id,
-          payload: selected.action_payload,
+          id: selected.id,
         });
         resetSearchState();
       } catch (error) {
