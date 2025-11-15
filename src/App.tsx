@@ -25,6 +25,79 @@ type AppSettings = {
   query_delay_ms: number;
 };
 
+type ModeId = "all" | "bookmark" | "app";
+
+type ModeConfig = {
+  id: ModeId;
+  label: string;
+  prefix?: string;
+  description: string;
+  placeholder: string;
+};
+
+const MODE_CONFIGS: Record<ModeId, ModeConfig> = {
+  all: {
+    id: "all",
+    label: "智能模式",
+    description: "搜索应用与网页",
+    placeholder: "搜索应用和网页（支持拼音/首字母）",
+  },
+  bookmark: {
+    id: "bookmark",
+    label: "书签模式",
+    prefix: "b",
+    description: "仅在收藏夹中查找",
+    placeholder: "书签模式 · 输入书签关键词",
+  },
+  app: {
+    id: "app",
+    label: "应用模式",
+    prefix: "r",
+    description: "仅搜索本机应用",
+    placeholder: "应用模式 · 输入应用名称",
+  },
+};
+
+const PREFIX_TO_MODE: Record<string, ModeConfig> = Object.values(MODE_CONFIGS).reduce(
+  (acc, mode) => {
+    if (mode.prefix) {
+      acc[mode.prefix] = mode;
+    }
+    return acc;
+  },
+  {} as Record<string, ModeConfig>,
+);
+
+type ModeDetectionResult = {
+  mode: ModeConfig;
+  cleanedQuery: string;
+  isPrefixOnly: boolean;
+};
+
+const detectModeFromInput = (inputValue: string): ModeDetectionResult => {
+  const trimmedLeft = inputValue.replace(/^\s+/, "");
+  const modeMatch = trimmedLeft.match(/^([a-zA-Z])(?:\s+|:)(.*)$/);
+
+  if (modeMatch) {
+    const [, prefixRaw, remainder = ""] = modeMatch;
+    const mode = PREFIX_TO_MODE[prefixRaw.toLowerCase()];
+    if (mode) {
+      const cleaned = remainder.replace(/^\s+/, "");
+      return {
+        mode,
+        cleanedQuery: cleaned,
+        isPrefixOnly: cleaned.length === 0,
+      };
+    }
+  }
+
+  return {
+    mode: MODE_CONFIGS.all,
+    cleanedQuery: inputValue,
+    isPrefixOnly: false,
+  };
+};
+
 type FallbackVisual = {
   glyph: string;
   background: string;
@@ -87,7 +160,8 @@ const FALLBACK_ICON_LIBRARY: FallbackVisual[] = [
 const HIDE_WINDOW_EVENT = "hide_window";
 const OPEN_SETTINGS_EVENT = "open_settings";
 function App() {
-  const [query, setQuery] = useState("");
+  const [inputValue, setInputValue] = useState("");
+  const [searchQuery, setSearchQuery] = useState("");
   const [results, setResults] = useState<SearchResult[]>([]);
   const [selectedIndex, setSelectedIndex] = useState(0);
   const [isComposing, setIsComposing] = useState(false);
@@ -97,11 +171,27 @@ function App() {
   const [hotkeyInput, setHotkeyInput] = useState("");
   const [queryDelayInput, setQueryDelayInput] = useState("");
   const [isSavingSettings, setIsSavingSettings] = useState(false);
+  const [activeMode, setActiveMode] = useState<ModeConfig>(MODE_CONFIGS.all);
+  const [isModePrefixOnly, setIsModePrefixOnly] = useState(false);
   const toastTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const settingsInputRef = useRef<HTMLInputElement | null>(null);
   const latestQueryRef = useRef("");
   const currentWindow = useMemo(() => getCurrentWindow(), []);
   const queryDelayMs = settings?.query_delay_ms ?? 120;
+
+  const applyInputValue = useCallback((value: string) => {
+    const detection = detectModeFromInput(value);
+    setInputValue(value);
+    setActiveMode(detection.mode);
+    setIsModePrefixOnly(detection.isPrefixOnly);
+    setSearchQuery(detection.cleanedQuery);
+  }, []);
+
+  const resetSearchState = useCallback(() => {
+    applyInputValue("");
+    setResults([]);
+    setSelectedIndex(0);
+  }, [applyInputValue]);
 
   const showToast = useCallback((message: string) => {
     setToastMessage(message);
@@ -200,9 +290,7 @@ function App() {
     const register = async () => {
       try {
         unlisten = await listen(HIDE_WINDOW_EVENT, () => {
-          setQuery("");
-          setResults([]);
-          setSelectedIndex(0);
+          resetSearchState();
           setIsSettingsOpen(false);
           void currentWindow.hide();
         });
@@ -230,12 +318,12 @@ function App() {
   }, [isSettingsOpen]);
 
   useEffect(() => {
-    if (isComposing) {
+    if (isComposing || isModePrefixOnly) {
       return;
     }
 
-    latestQueryRef.current = query;
-    const trimmed = query.trim();
+    latestQueryRef.current = searchQuery;
+    const trimmed = searchQuery.trim();
 
     if (!trimmed) {
       setResults([]);
@@ -243,12 +331,15 @@ function App() {
       return;
     }
 
+    const payload: { query: string; mode?: ModeId } = { query: trimmed };
+    if (activeMode.id !== "all") {
+      payload.mode = activeMode.id;
+    }
+
     const timeoutId = window.setTimeout(async () => {
       try {
-        const newResults = await invoke<SearchResult[]>("submit_query", {
-          query,
-        });
-        if (latestQueryRef.current === query) {
+        const newResults = await invoke<SearchResult[]>("submit_query", payload);
+        if (latestQueryRef.current === searchQuery) {
           setResults(newResults);
           setSelectedIndex(0);
         }
@@ -261,7 +352,7 @@ function App() {
     return () => {
       window.clearTimeout(timeoutId);
     };
-  }, [query, isComposing, showToast, queryDelayMs]);
+  }, [searchQuery, activeMode, isComposing, isModePrefixOnly, showToast, queryDelayMs]);
 
   const resultsCount = results.length;
 
@@ -276,15 +367,13 @@ function App() {
           id: selected.action_id,
           payload: selected.action_payload,
         });
-        setQuery("");
-        setResults([]);
-        setSelectedIndex(0);
+        resetSearchState();
       } catch (error) {
         console.error("Failed to execute action", error);
         showToast("执行失败，请检查目标是否存在");
       }
     },
-    [showToast],
+    [resetSearchState, showToast],
   );
 
   const stepSelection = useCallback(
@@ -403,7 +492,7 @@ function App() {
     [handleSettingsSave],
   );
 
-  const hasQuery = query.trim().length > 0;
+  const hasQuery = searchQuery.trim().length > 0;
   const hasMatches = resultsCount > 0;
   const activeResult = hasMatches ? results[selectedIndex] : null;
   const fallbackVisual = activeResult
@@ -427,25 +516,40 @@ function App() {
         <div className="search-icon" aria-hidden="true">
           ⌕
         </div>
+        <div
+          className={
+            activeMode.id === "all"
+              ? "mode-badge"
+              : `mode-badge mode-${activeMode.id}`
+          }
+        >
+          {activeMode.label}
+          {activeMode.prefix ? ` · ${activeMode.prefix}` : ""}
+        </div>
         <input
           type="text"
           className="search-bar"
-          value={query}
+          value={inputValue}
           onChange={(event: ChangeEvent<HTMLInputElement>) =>
-            setQuery(event.currentTarget.value)
+            applyInputValue(event.currentTarget.value)
           }
           onCompositionStart={(_event: CompositionEvent<HTMLInputElement>) =>
             setIsComposing(true)
           }
           onCompositionEnd={(event: CompositionEvent<HTMLInputElement>) => {
             setIsComposing(false);
-            setQuery(event.currentTarget.value);
+            applyInputValue(event.currentTarget.value);
           }}
           onKeyDown={handleKeyDown}
-          placeholder="搜索应用和网页（支持拼音/首字母）"
+          placeholder={activeMode.placeholder}
           autoFocus
         />
       </div>
+      {isModePrefixOnly ? (
+        <div className="mode-prefix-hint">
+          已切换至 {activeMode.label}，请输入关键词开始搜索
+        </div>
+      ) : null}
       <div
         className={hasMatches ? "results-wrapper expanded" : "results-wrapper"}
       >
@@ -515,8 +619,12 @@ function App() {
           </div>
         ) : null}
       </div>
-      {hasQuery && !hasMatches ? (
-        <div className="empty-hint">没有匹配的结果</div>
+      {!isModePrefixOnly && hasQuery && !hasMatches ? (
+        <div className="empty-hint">
+          {activeMode.id === "all"
+            ? "没有匹配的结果"
+            : `当前 ${activeMode.label} 中没有找到匹配项`}
+        </div>
       ) : null}
       {isSettingsOpen ? (
         <button

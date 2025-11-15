@@ -29,12 +29,47 @@ const MAX_QUERY_DELAY_MS: u64 = 2000;
 pub const HIDE_WINDOW_EVENT: &str = "hide_window";
 pub const OPEN_SETTINGS_EVENT: &str = "open_settings";
 
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum QueryMode {
+    All,
+    Bookmark,
+    Application,
+}
+
+impl QueryMode {
+    fn from_option(mode: Option<String>) -> Self {
+        match mode
+            .as_deref()
+            .map(|value| value.trim().to_lowercase())
+            .as_deref()
+        {
+            Some("bookmark") | Some("bookmarks") | Some("b") => Self::Bookmark,
+            Some("app") | Some("apps") | Some("application") | Some("r") => Self::Application,
+            _ => Self::All,
+        }
+    }
+
+    fn allows_bookmarks(&self) -> bool {
+        matches!(self, Self::All | Self::Bookmark)
+    }
+
+    fn allows_applications(&self) -> bool {
+        matches!(self, Self::All | Self::Application)
+    }
+}
+
 #[tauri::command]
-pub fn submit_query(query: String, state: State<'_, AppState>) -> Vec<SearchResult> {
+pub fn submit_query(
+    query: String,
+    mode: Option<String>,
+    state: State<'_, AppState>,
+) -> Vec<SearchResult> {
     let trimmed = query.trim();
     if trimmed.is_empty() {
         return Vec::new();
     }
+
+    let query_mode = QueryMode::from_option(mode);
 
     let mut results = Vec::new();
     let mut counter = 0usize;
@@ -53,56 +88,71 @@ pub fn submit_query(query: String, state: State<'_, AppState>) -> Vec<SearchResu
     }
 
     let matcher = SkimMatcherV2::default();
-    let apps = {
-        let guard = state.app_index.lock().expect("failed to lock app index");
-        guard.clone()
+    let apps = if query_mode.allows_applications() {
+        Some(
+            state
+                .app_index
+                .lock()
+                .expect("failed to lock app index")
+                .clone(),
+        )
+    } else {
+        None
     };
-    let bookmarks = {
-        let guard = state
-            .bookmark_index
-            .lock()
-            .expect("failed to lock bookmark index");
-        guard.clone()
+    let bookmarks = if query_mode.allows_bookmarks() {
+        Some(
+            state
+                .bookmark_index
+                .lock()
+                .expect("failed to lock bookmark index")
+                .clone(),
+        )
+    } else {
+        None
     };
 
-    for app in apps.iter() {
-        if let Some(score) = match_application(&matcher, app, trimmed) {
-            counter += 1;
-            results.push(SearchResult {
-                id: format!("app-{}", app.id),
-                title: app.name.clone(),
-                subtitle: app
-                    .description
-                    .clone()
-                    .filter(|d| !d.is_empty())
-                    .unwrap_or_else(|| app.path.clone()),
-                icon: app.icon_b64.clone(),
-                score,
-                action_id: match app.app_type {
-                    AppType::Win32 => "app".to_string(),
-                    AppType::Uwp => "uwp".to_string(),
-                },
-                action_payload: app.path.clone(),
-            });
+    if let Some(apps) = apps.as_ref() {
+        for app in apps.iter() {
+            if let Some(score) = match_application(&matcher, app, trimmed) {
+                counter += 1;
+                results.push(SearchResult {
+                    id: format!("app-{}", app.id),
+                    title: app.name.clone(),
+                    subtitle: app
+                        .description
+                        .clone()
+                        .filter(|d| !d.is_empty())
+                        .unwrap_or_else(|| app.path.clone()),
+                    icon: app.icon_b64.clone(),
+                    score,
+                    action_id: match app.app_type {
+                        AppType::Win32 => "app".to_string(),
+                        AppType::Uwp => "uwp".to_string(),
+                    },
+                    action_payload: app.path.clone(),
+                });
+            }
         }
     }
 
-    for bookmark in bookmarks.iter() {
-        if let Some(score) = match_bookmark(&matcher, bookmark, trimmed) {
-            counter += 1;
-            let subtitle = match &bookmark.folder_path {
-                Some(path) => format!("收藏夹 · {path} · {}", bookmark.url),
-                None => format!("收藏夹 · {}", bookmark.url),
-            };
-            results.push(SearchResult {
-                id: format!("bookmark-{}", bookmark.id),
-                title: bookmark.title.clone(),
-                subtitle,
-                icon: String::new(),
-                score,
-                action_id: "bookmark".to_string(),
-                action_payload: bookmark.url.clone(),
-            });
+    if let Some(bookmarks) = bookmarks.as_ref() {
+        for bookmark in bookmarks.iter() {
+            if let Some(score) = match_bookmark(&matcher, bookmark, trimmed) {
+                counter += 1;
+                let subtitle = match &bookmark.folder_path {
+                    Some(path) => format!("收藏夹 · {path} · {}", bookmark.url),
+                    None => format!("收藏夹 · {}", bookmark.url),
+                };
+                results.push(SearchResult {
+                    id: format!("bookmark-{}", bookmark.id),
+                    title: bookmark.title.clone(),
+                    subtitle,
+                    icon: String::new(),
+                    score,
+                    action_id: "bookmark".to_string(),
+                    action_payload: bookmark.url.clone(),
+                });
+            }
         }
     }
 
