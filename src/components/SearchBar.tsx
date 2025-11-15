@@ -4,12 +4,10 @@ import type {
     KeyboardEvent as InputKeyboardEvent,
     RefObject,
 } from "react";
-import type { ModeConfig } from "../types";
 
 export type SearchBarProps = {
     value: string;
     placeholder: string;
-    activeMode: ModeConfig;
     inputRef: RefObject<HTMLInputElement>;
     onChange: (event: ChangeEvent<HTMLInputElement>) => void;
     onCompositionStart: (event: CompositionEvent<HTMLInputElement>) => void;
@@ -20,25 +18,14 @@ export type SearchBarProps = {
 export const SearchBar = ({
     value,
     placeholder,
-    activeMode,
     inputRef,
     onChange,
     onCompositionStart,
     onCompositionEnd,
     onKeyDown,
 }: SearchBarProps) => {
-    const badgeClassName =
-        activeMode.id === "all" ? "mode-badge" : `mode-badge mode-${activeMode.id}`;
-
     return (
         <div className="search-shell" data-testid="search-shell">
-            <div className="search-icon" aria-hidden="true">
-                ⌕
-            </div>
-            <div className={badgeClassName} aria-live="polite">
-                {activeMode.label}
-                {activeMode.prefix ? ` · ${activeMode.prefix}` : ""}
-            </div>
             <input
                 ref={inputRef}
                 type="text"

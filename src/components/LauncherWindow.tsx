@@ -17,14 +17,13 @@ import { listen } from "@tauri-apps/api/event";
 import type { UnlistenFn } from "@tauri-apps/api/event";
 
 import { SearchBar } from "./SearchBar";
-import { ModeStrip } from "./ModeStrip";
 import { ResultList } from "./ResultList";
 import { PreviewPane } from "./PreviewPane";
 import { Toast } from "./Toast";
-import { MODE_LIST, MODE_CONFIGS, detectModeFromInput } from "../constants/modes";
+import { MODE_CONFIGS, detectModeFromInput } from "../constants/modes";
 import { HIDE_WINDOW_EVENT, OPEN_SETTINGS_EVENT, SETTINGS_UPDATED_EVENT } from "../constants/events";
 import { initialLauncherState, launcherReducer } from "../state/launcherReducer";
-import type { AppSettings, ModeConfig, SearchResult } from "../types";
+import type { AppSettings, SearchResult } from "../types";
 import { pickFallbackIcon } from "../utils/fallbackIcon";
 
 export const LauncherWindow = () => {
@@ -317,25 +316,6 @@ export const LauncherWindow = () => {
         }
     }, []);
 
-    const handleModeChipSelect = useCallback(
-        (mode: ModeConfig) => {
-            const detection = detectModeFromInput(state.inputValue);
-            const baseQuery = detection.cleanedQuery;
-
-            if (mode.id === "all") {
-                applyInputValue(baseQuery);
-            } else if (mode.prefix) {
-                const nextValue = baseQuery ? `${mode.prefix} ${baseQuery}` : `${mode.prefix} `;
-                applyInputValue(nextValue);
-            }
-
-            requestAnimationFrame(() => {
-                searchInputRef.current?.focus();
-            });
-        },
-        [applyInputValue, state.inputValue],
-    );
-
     const handleSettingsButtonClick = useCallback(() => {
         void openSettingsWindow();
     }, [openSettingsWindow]);
@@ -362,27 +342,17 @@ export const LauncherWindow = () => {
     const showPreviewPane = state.settings?.enable_preview_panel ?? true;
     const contentAreaClassName = showPreviewPane ? "content-area" : "content-area content-area--single";
     const isIdle = !hasQuery && !state.isModePrefixOnly;
-    const shouldShowModeStrip = !isIdle && !state.isModePrefixOnly;
     const windowClassName = isIdle ? "flow-window flow-window--compact" : "flow-window";
 
     return (
         <div className={windowClassName} data-tauri-drag-region>
             <header className="chrome-bar">
                 <div className="chrome-grip" aria-hidden="true" data-tauri-drag-region />
-                <button
-                    type="button"
-                    className="settings-button"
-                    onClick={handleSettingsButtonClick}
-                    aria-label="打开设置窗口"
-                >
-                    ⚙
-                </button>
             </header>
             <section className={isIdle ? "search-area search-area--solo" : "search-area"}>
                 <SearchBar
                     value={state.inputValue}
                     placeholder={state.activeMode.placeholder}
-                    activeMode={state.activeMode}
                     inputRef={searchInputRef}
                     onChange={(event: ChangeEvent<HTMLInputElement>) =>
                         applyInputValue(event.currentTarget.value)
@@ -400,12 +370,6 @@ export const LauncherWindow = () => {
                     <div className="mode-prefix-hint">
                         已切换至 {state.activeMode.label}，请输入关键词开始搜索
                     </div>
-                ) : shouldShowModeStrip ? (
-                    <ModeStrip
-                        modes={MODE_LIST}
-                        activeModeId={state.activeMode.id}
-                        onSelect={handleModeChipSelect}
-                    />
                 ) : null}
             </section>
             {isIdle ? null : (
