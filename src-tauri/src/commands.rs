@@ -23,7 +23,7 @@ use crate::{
     state::{AppState, PendingAction},
 };
 
-const DEFAULT_RESULT_LIMIT: usize = 8;
+const DEFAULT_RESULT_LIMIT: usize = 40;
 const MIN_QUERY_DELAY_MS: u64 = 50;
 const MAX_QUERY_DELAY_MS: u64 = 2000;
 pub const HIDE_WINDOW_EVENT: &str = "hide_window";
