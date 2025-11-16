@@ -6,11 +6,10 @@
   --font-weight-base: 400;
 
   --page-background: radial-gradient(circle at 20% 20%, #191c25, #0c0e13 60%);
-  --window-surface: linear-gradient(
-    145deg,
-    rgba(25, 29, 42, 0.97),
-    rgba(13, 15, 22, 0.96)
-  );
+  --window-opacity: 0.95;
+  --window-surface: linear-gradient(145deg,
+      rgba(25, 29, 42, var(--window-opacity)),
+      rgba(13, 15, 22, var(--window-opacity)));
   --window-shadow: 0 40px 80px rgba(0, 0, 0, 0.65);
   --window-border: inset 0 0 0 1px rgba(255, 255, 255, 0.03);
 

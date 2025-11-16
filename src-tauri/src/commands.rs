@@ -41,6 +41,8 @@ const MIN_QUERY_DELAY_MS: u64 = 50;
 const MAX_QUERY_DELAY_MS: u64 = 2000;
 const MIN_RESULT_LIMIT: u32 = 10;
 const MAX_RESULT_LIMIT: u32 = 60;
+const MIN_WINDOW_OPACITY: f32 = 0.6;
+const MAX_WINDOW_OPACITY: f32 = 1.0;
 pub const HIDE_WINDOW_EVENT: &str = "hide_window";
 pub const OPEN_SETTINGS_EVENT: &str = "open_settings";
 pub const SETTINGS_UPDATED_EVENT: &str = "settings_updated";
@@ -60,6 +62,8 @@ pub struct SettingsUpdatePayload {
     pub launch_on_startup: Option<bool>,
     pub force_english_input: Option<bool>,
     pub debug_mode: Option<bool>,
+    pub window_opacity: Option<f32>,
+    pub auto_hotkey_capture: Option<bool>,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -371,6 +375,14 @@ pub fn update_settings(
         guard.debug_mode = value;
     }
 
+    if let Some(value) = updates.window_opacity {
+        guard.window_opacity = clamp_window_opacity(value);
+    }
+
+    if let Some(value) = updates.auto_hotkey_capture {
+        guard.auto_hotkey_capture = value;
+    }
+
     // 同步模式前缀设置（如果前端传入了非空值）
     if let Some(prefix) = updates.prefix_app {
         if !prefix.trim().is_empty() {
@@ -416,6 +428,8 @@ pub fn update_hotkey(
             launch_on_startup: None,
             force_english_input: None,
             debug_mode: None,
+            window_opacity: None,
+            auto_hotkey_capture: None,
         },
         app_handle,
         state,
@@ -430,6 +444,10 @@ fn normalize_query_delay(candidate: Option<u64>, current: u64) -> u64 {
 fn normalize_max_results(candidate: Option<u32>, current: u32) -> u32 {
     let value = candidate.unwrap_or(current);
     value.clamp(MIN_RESULT_LIMIT, MAX_RESULT_LIMIT)
+}
+
+fn clamp_window_opacity(value: f32) -> f32 {
+    value.clamp(MIN_WINDOW_OPACITY, MAX_WINDOW_OPACITY)
 }
 
 fn open_url(app_handle: &AppHandle, target: &str) -> Result<(), String> {

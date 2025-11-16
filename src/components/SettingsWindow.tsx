@@ -4,11 +4,89 @@ import { invoke } from "@tauri-apps/api/core";
 import { getVersion } from "@tauri-apps/api/app";
 import type { AppSettings } from "../types";
 import { Toast } from "./Toast";
+import { applyWindowOpacityVariable } from "../utils/theme";
 
 const MIN_QUERY_DELAY = 50;
 const MAX_QUERY_DELAY = 2000;
 const MIN_RESULT_LIMIT = 10;
 const MAX_RESULT_LIMIT = 60;
+const MIN_WINDOW_OPACITY_PERCENT = 60;
+const MAX_WINDOW_OPACITY_PERCENT = 100;
+const MIN_WINDOW_OPACITY = MIN_WINDOW_OPACITY_PERCENT / 100;
+const MAX_WINDOW_OPACITY = MAX_WINDOW_OPACITY_PERCENT / 100;
+const IS_MAC = navigator.userAgent.toLowerCase().includes("mac");
+const MODIFIER_KEYS = new Set(["shift", "control", "alt", "meta"]);
+const KEY_NAME_MAP: Record<string, string> = {
+  Escape: "Esc",
+  " ": "Space",
+  Spacebar: "Space",
+  ArrowUp: "Up",
+  ArrowDown: "Down",
+  ArrowLeft: "Left",
+  ArrowRight: "Right",
+  Enter: "Enter",
+  Tab: "Tab",
+  Backspace: "Backspace",
+  Delete: "Delete",
+  Insert: "Insert",
+  Home: "Home",
+  End: "End",
+  PageUp: "PageUp",
+  PageDown: "PageDown",
+};
+
+const normalizeHotkeyKey = (key: string): string | null => {
+  if (!key) {
+    return null;
+  }
+  if (KEY_NAME_MAP[key]) {
+    return KEY_NAME_MAP[key];
+  }
+  if (/^F\d{1,2}$/i.test(key)) {
+    return key.toUpperCase();
+  }
+  if (key.length === 1) {
+    return key.toUpperCase();
+  }
+  return key.length ? key : null;
+};
+
+const buildShortcutFromEvent = (
+  event: InputKeyboardEvent<HTMLInputElement>,
+): string | null => {
+  const keyLower = event.key.toLowerCase();
+  const parts: string[] = [];
+
+  if (event.ctrlKey || keyLower === "control") {
+    parts.push("Ctrl");
+  }
+  if (event.shiftKey || keyLower === "shift") {
+    parts.push("Shift");
+  }
+  if (event.altKey || keyLower === "alt") {
+    parts.push("Alt");
+  }
+  if (event.metaKey || keyLower === "meta") {
+    parts.push(IS_MAC ? "Cmd" : "Win");
+  }
+
+  const normalizedKey = normalizeHotkeyKey(event.key);
+  if (!normalizedKey) {
+    return null;
+  }
+
+  if (MODIFIER_KEYS.has(keyLower)) {
+    return null;
+  }
+
+  parts.push(normalizedKey);
+  const deduped = Array.from(new Set(parts));
+  const isFunctionKey = /^F\d{1,2}$/i.test(normalizedKey);
+  if (!isFunctionKey && deduped.length === 1) {
+    return null;
+  }
+  return deduped.join("+");
+};
 
 type SettingsSectionId = "general" | "search" | "about";
 
@@ -18,17 +96,18 @@ const SECTION_DEFS: Array<{
   description: string;
   icon: string;
 }> = [
-  { id: "general", label: "常规", description: "呼出快捷键 & 防抖", icon: "⌘" },
-  { id: "search", label: "搜索", description: "结果来源 / 数量", icon: "🔍" },
-  { id: "about", label: "关于", description: "版本与状态", icon: "ℹ️" },
-];
+    { id: "general", label: "常规", description: "呼出快捷键 & 防抖", icon: "⌘" },
+    { id: "search", label: "搜索", description: "结果来源 / 数量", icon: "🔍" },
+    { id: "about", label: "关于", description: "版本与状态", icon: "ℹ️" },
+  ];
 
 type BooleanSettingKey =
   | "enable_app_results"
   | "enable_bookmark_results"
   | "launch_on_startup"
   | "force_english_input"
-  | "debug_mode";
+  | "debug_mode"
+  | "auto_hotkey_capture";
 
 const TRACKED_SETTING_KEYS: Array<keyof AppSettings> = [
   "global_hotkey",
@@ -42,6 +121,8 @@ const TRACKED_SETTING_KEYS: Array<keyof AppSettings> = [
   "launch_on_startup",
   "force_english_input",
   "debug_mode",
+  "window_opacity",
+  "auto_hotkey_capture",
 ];
 
 export const SettingsWindow = () => {
@@ -72,6 +153,7 @@ export const SettingsWindow = () => {
       const appSettings = await invoke<AppSettings>("get_settings");
       setSettings(appSettings);
       setDraft({ ...appSettings });
+      applyWindowOpacityVariable(appSettings.window_opacity);
     } catch (error) {
       console.error("Failed to load settings", error);
       showToast("加载设置失败");
@@ -114,6 +196,12 @@ export const SettingsWindow = () => {
     }
   }, [draft]);
 
+  useEffect(() => {
+    if (draft) {
+      applyWindowOpacityVariable(draft.window_opacity);
+    }
+  }, [draft?.window_opacity]);
+
   const updateDraftValue = useCallback(
     <K extends keyof AppSettings>(key: K, value: AppSettings[K]) => {
       setDraft((prev) => (prev ? { ...prev, [key]: value } : prev));
@@ -124,6 +212,15 @@ export const SettingsWindow = () => {
   const toggleBoolean = useCallback((key: BooleanSettingKey) => {
     setDraft((prev) => (prev ? { ...prev, [key]: !prev[key] } : prev));
   }, []);
+
+  const handleOpacityChange = useCallback(
+    (percent: number) => {
+      const normalized = percent / 100;
+      updateDraftValue("window_opacity", normalized);
+      applyWindowOpacityVariable(normalized);
+    },
+    [updateDraftValue],
+  );
 
   const isDirty = useMemo(() => {
     if (!settings || !draft) {
@@ -171,6 +268,12 @@ export const SettingsWindow = () => {
     if (prefixError) {
       return prefixError;
     }
+    if (
+      draft.window_opacity < MIN_WINDOW_OPACITY ||
+      draft.window_opacity > MAX_WINDOW_OPACITY
+    ) {
+      return `透明度需在 ${MIN_WINDOW_OPACITY_PERCENT}%~${MAX_WINDOW_OPACITY_PERCENT}% 之间`;
+    }
     return null;
   }, [draft]);
 
@@ -199,20 +302,36 @@ export const SettingsWindow = () => {
     }
   }, [draft, showToast, validationMessage]);
 
-  const handleKeyDown = useCallback(
+  const handleHotkeyInputKeyDown = useCallback(
     (event: InputKeyboardEvent<HTMLInputElement>) => {
+      if (draft?.auto_hotkey_capture) {
+        event.preventDefault();
+        event.stopPropagation();
+        if (event.repeat) {
+          return;
+        }
+        const shortcut = buildShortcutFromEvent(event);
+        if (shortcut) {
+          updateDraftValue("global_hotkey", shortcut);
+        } else {
+          showToast("请按下至少一个非修饰键");
+        }
+        return;
+      }
+
       if (event.key === "Enter") {
         event.preventDefault();
         void handleSettingsSave();
       }
     },
-    [handleSettingsSave],
+    [draft?.auto_hotkey_capture, handleSettingsSave, showToast, updateDraftValue],
   );
 
   const handleReset = useCallback(() => {
     if (settings) {
       setDraft({ ...settings });
       setActiveSection("general");
+      applyWindowOpacityVariable(settings.window_opacity);
       showToast("已恢复保存的配置");
     }
   }, [settings, showToast]);
@@ -243,14 +362,30 @@ export const SettingsWindow = () => {
               onChange={(event: ChangeEvent<HTMLInputElement>) =>
                 updateDraftValue("global_hotkey", event.currentTarget.value)
               }
-              onKeyDown={handleKeyDown}
+              onKeyDown={handleHotkeyInputKeyDown}
               className="settings-input"
               placeholder="例如 Alt+Space"
+              readOnly={draft.auto_hotkey_capture}
             />
             <span className="settings-hint">
-              用 "+" 连接组合键，如 Ctrl+Shift+P
+              {draft.auto_hotkey_capture
+                ? "已开启监听：点击输入框后直接按下组合键"
+                : "用 \"+\" 连接组合键，如 Ctrl+Shift+P"}
             </span>
           </div>
+          <button
+            type="button"
+            className={`settings-toggle ${draft.auto_hotkey_capture ? "on" : "off"}`}
+            onClick={() => toggleBoolean("auto_hotkey_capture")}
+          >
+            <span className="toggle-pill" aria-hidden="true" />
+            <div>
+              <div className="toggle-title">启用快捷键监听</div>
+              <div className="toggle-subtitle">
+                开启后无需手动输入组合键，直接按键即可写入
+              </div>
+            </div>
+          </button>
         </article>
         <article className="settings-card">
           <header className="settings-card__header">
@@ -299,6 +434,38 @@ export const SettingsWindow = () => {
               范围 {MIN_QUERY_DELAY}~{MAX_QUERY_DELAY} ms
             </span>
           </div>
+        </article>
+        <article className="settings-card">
+          <header className="settings-card__header">
+            <div>
+              <p className="settings-card__title">窗口透明度</p>
+              <p className="settings-card__subtitle">
+                越低越贴近 Flow Launcher 的玻璃质感
+              </p>
+            </div>
+            <span className="settings-chip">
+              {Math.round(draft.window_opacity * 100)}%
+            </span>
+          </header>
+          <div className="settings-slider">
+            <input
+              type="range"
+              min={MIN_WINDOW_OPACITY_PERCENT}
+              max={MAX_WINDOW_OPACITY_PERCENT}
+              step={1}
+              value={Math.round(draft.window_opacity * 100)}
+              onChange={(event: ChangeEvent<HTMLInputElement>) =>
+                handleOpacityChange(Number(event.currentTarget.value))
+              }
+            />
+            <div className="settings-slider__scale">
+              <span>{MIN_WINDOW_OPACITY_PERCENT}%</span>
+              <span>{MAX_WINDOW_OPACITY_PERCENT}%</span>
+            </div>
+          </div>
+          <span className="settings-hint">
+            调整后无需保存即可预览效果，保存以便下次沿用
+          </span>
         </article>
         <article className="settings-card">
           <header className="settings-card__header">

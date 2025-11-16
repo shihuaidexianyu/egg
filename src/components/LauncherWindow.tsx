@@ -29,6 +29,7 @@ import {
   launcherReducer,
 } from "../state/launcherReducer";
 import type { AppSettings, SearchResult } from "../types";
+import { applyWindowOpacityVariable } from "../utils/theme";
 
 const SETTINGS_WINDOW_LABEL = "settings";
 
@@ -182,6 +183,11 @@ export const LauncherWindow = () => {
   useEffect(() => {
     void loadSettings();
   }, [loadSettings]);
+
+  useEffect(() => {
+    const opacity = state.settings?.window_opacity ?? 0.95;
+    applyWindowOpacityVariable(opacity);
+  }, [state.settings?.window_opacity]);
 
   useEffect(() => {
     focusSearchInput();

@@ -20,6 +20,8 @@ export type AppSettings = {
   launch_on_startup: boolean;
   force_english_input: boolean;
   debug_mode: boolean;
+  window_opacity: number;
+  auto_hotkey_capture: boolean;
 };
 
 export type ModeId = "all" | "bookmark" | "app" | "search";
@@ -52,14 +54,14 @@ export type LauncherState = {
 
 export type LauncherAction =
   | {
-      type: "SET_INPUT";
-      payload: {
-        inputValue: string;
-        searchQuery: string;
-        activeMode: ModeConfig;
-        isModePrefixOnly: boolean;
-      };
-    }
+    type: "SET_INPUT";
+    payload: {
+      inputValue: string;
+      searchQuery: string;
+      activeMode: ModeConfig;
+      isModePrefixOnly: boolean;
+    };
+  }
   | { type: "SET_RESULTS"; payload: SearchResult[] }
   | { type: "SET_SELECTED_INDEX"; payload: number }
   | { type: "SET_TOAST"; payload: string | null }
