@@ -63,7 +63,6 @@ pub struct SettingsUpdatePayload {
     pub force_english_input: Option<bool>,
     pub debug_mode: Option<bool>,
     pub window_opacity: Option<f32>,
-    pub auto_hotkey_capture: Option<bool>,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -379,27 +378,20 @@ pub fn update_settings(
         guard.window_opacity = clamp_window_opacity(value);
     }
 
-    if let Some(value) = updates.auto_hotkey_capture {
-        guard.auto_hotkey_capture = value;
-    }
-
     // 同步模式前缀设置（如果前端传入了非空值）
     if let Some(prefix) = updates.prefix_app {
-        if !prefix.trim().is_empty() {
-            guard.prefix_app = prefix.trim().to_string();
-        }
+        guard.prefix_app = normalize_prefix(&prefix)
+            .ok_or_else(|| "应用模式前缀需为单个字母，可选跟随空格或冒号".to_string())?;
     }
 
     if let Some(prefix) = updates.prefix_bookmark {
-        if !prefix.trim().is_empty() {
-            guard.prefix_bookmark = prefix.trim().to_string();
-        }
+        guard.prefix_bookmark = normalize_prefix(&prefix)
+            .ok_or_else(|| "书签模式前缀需为单个字母，可选跟随空格或冒号".to_string())?;
     }
 
     if let Some(prefix) = updates.prefix_search {
-        if !prefix.trim().is_empty() {
-            guard.prefix_search = prefix.trim().to_string();
-        }
+        guard.prefix_search = normalize_prefix(&prefix)
+            .ok_or_else(|| "搜索模式前缀需为单个字母，可选跟随空格或冒号".to_string())?;
     }
 
     guard.save(&app_handle)?;
@@ -429,7 +421,6 @@ pub fn update_hotkey(
             force_english_input: None,
             debug_mode: None,
             window_opacity: None,
-            auto_hotkey_capture: None,
         },
         app_handle,
         state,
@@ -448,6 +439,40 @@ fn normalize_max_results(candidate: Option<u32>, current: u32) -> u32 {
 
 fn clamp_window_opacity(value: f32) -> f32 {
     value.clamp(MIN_WINDOW_OPACITY, MAX_WINDOW_OPACITY)
+}
+
+fn normalize_prefix(value: &str) -> Option<String> {
+    let trimmed_start = value.trim_start();
+    if trimmed_start.is_empty() {
+        return None;
+    }
+
+    let mut chars = trimmed_start.chars();
+    let Some(first) = chars.next() else {
+        return None;
+    };
+
+    if !first.is_ascii_alphabetic() {
+        return None;
+    }
+
+    let mut normalized = String::new();
+    normalized.push(first.to_ascii_uppercase());
+
+    let remainder: String = chars.collect();
+    let mut remainder_chars = remainder.chars().filter(|c| !c.is_control());
+    if let Some(next) = remainder_chars.next() {
+        match next {
+            ' ' | ':' => normalized.push(next),
+            _ => return None,
+        }
+
+        if remainder_chars.any(|c| !c.is_whitespace()) {
+            return None;
+        }
+    }
+
+    Some(normalized)
 }
 
 fn open_url(app_handle: &AppHandle, target: &str) -> Result<(), String> {

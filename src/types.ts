@@ -21,7 +21,6 @@ export type AppSettings = {
   force_english_input: boolean;
   debug_mode: boolean;
   window_opacity: number;
-  auto_hotkey_capture: boolean;
 };
 
 export type ModeId = "all" | "bookmark" | "app" | "search";

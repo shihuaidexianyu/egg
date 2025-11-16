@@ -503,6 +503,30 @@ input {
   gap: 8px;
 }
 
+.settings-hotkey-control {
+  display: flex;
+  gap: 10px;
+  align-items: stretch;
+  flex-wrap: wrap;
+}
+
+.settings-hotkey-control .settings-input {
+  flex: 1;
+  min-width: 220px;
+}
+
+.ghost-button--compact {
+  padding-inline: 14px;
+  min-width: 140px;
+  border: 1px solid transparent;
+}
+
+.ghost-button--capturing {
+  border-color: rgba(109, 143, 255, 0.8);
+  background: rgba(109, 143, 255, 0.2);
+  color: #e7ecff;
+}
+
 .settings-input {
   width: 100%;
   padding: 12px 14px;

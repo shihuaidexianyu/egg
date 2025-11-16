@@ -83,19 +83,56 @@ export const detectModeFromInput = (
   prefixToMode: Record<string, ModeConfig>,
 ): ModeDetectionResult => {
   const trimmedLeft = inputValue.replace(/^\s+/, "");
-  const modeMatch = trimmedLeft.match(/^([a-zA-Z])(?:\s+|:)(.*)$/);
+  if (!trimmedLeft) {
+    return {
+      mode: DEFAULT_MODE_CONFIGS.all,
+      cleanedQuery: "",
+      isPrefixOnly: false,
+    };
+  }
 
-  if (modeMatch) {
-    const [, prefixRaw, remainder = ""] = modeMatch;
-    const mode = prefixToMode[prefixRaw.toLowerCase()];
-    if (mode) {
-      const cleaned = remainder.replace(/^\s+/, "");
-      return {
-        mode,
-        cleanedQuery: cleaned,
-        isPrefixOnly: cleaned.length === 0,
-      };
+  const lowerInput = trimmedLeft.toLowerCase();
+  const sortedEntries = Object.entries(prefixToMode).sort(
+    (a, b) => b[0].length - a[0].length,
+  );
+
+  for (const [rawPrefix, mode] of sortedEntries) {
+    const normalizedPrefix = rawPrefix.toLowerCase();
+    if (!normalizedPrefix) {
+      continue;
     }
+
+    const suffixChar = normalizedPrefix.slice(-1);
+    const hasInlineDelimiter = suffixChar === " " || suffixChar === ":";
+
+    if (hasInlineDelimiter) {
+      if (lowerInput.startsWith(normalizedPrefix)) {
+        const remainder = trimmedLeft.slice(normalizedPrefix.length);
+        const cleaned = remainder.replace(/^\s+/, "");
+        return {
+          mode,
+          cleanedQuery: cleaned,
+          isPrefixOnly: cleaned.length === 0,
+        };
+      }
+      continue;
+    }
+
+    if (!lowerInput.startsWith(normalizedPrefix)) {
+      continue;
+    }
+
+    const remainder = trimmedLeft.slice(normalizedPrefix.length);
+    if (remainder && !/^[:\s]/.test(remainder)) {
+      continue;
+    }
+
+    const cleaned = remainder.replace(/^[:\s]+/, "");
+    return {
+      mode,
+      cleanedQuery: cleaned,
+      isPrefixOnly: cleaned.length === 0,
+    };
   }
 
   return {

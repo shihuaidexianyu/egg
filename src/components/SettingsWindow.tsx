@@ -106,8 +106,7 @@ type BooleanSettingKey =
   | "enable_bookmark_results"
   | "launch_on_startup"
   | "force_english_input"
-  | "debug_mode"
-  | "auto_hotkey_capture";
+  | "debug_mode";
 
 const TRACKED_SETTING_KEYS: Array<keyof AppSettings> = [
   "global_hotkey",
@@ -122,7 +121,6 @@ const TRACKED_SETTING_KEYS: Array<keyof AppSettings> = [
   "force_english_input",
   "debug_mode",
   "window_opacity",
-  "auto_hotkey_capture",
 ];
 
 export const SettingsWindow = () => {
@@ -133,6 +131,7 @@ export const SettingsWindow = () => {
   const [isSaving, setIsSaving] = useState(false);
   const [toastMessage, setToastMessage] = useState<string | null>(null);
   const [appVersion, setAppVersion] = useState("--");
+  const [isCapturingHotkey, setIsCapturingHotkey] = useState(false);
   const hotkeyInputRef = useRef<HTMLInputElement | null>(null);
   const toastTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const debugModeEffective = draft?.debug_mode ?? settings?.debug_mode ?? false;
@@ -182,6 +181,28 @@ export const SettingsWindow = () => {
       window.removeEventListener("contextmenu", handleContextMenu);
     };
   }, [debugModeEffective]);
+
+  useEffect(() => {
+    if (!isCapturingHotkey || !hotkeyInputRef.current) {
+      return;
+    }
+    const input = hotkeyInputRef.current;
+    input.focus();
+    input.select();
+  }, [isCapturingHotkey]);
+
+  useEffect(() => {
+    if (!isCapturingHotkey) {
+      return;
+    }
+    const handleWindowBlur = () => {
+      setIsCapturingHotkey(false);
+    };
+    window.addEventListener("blur", handleWindowBlur);
+    return () => {
+      window.removeEventListener("blur", handleWindowBlur);
+    };
+  }, [isCapturingHotkey]);
 
   const initialHotkeyFocusDone = useRef(false);
 
@@ -252,12 +273,20 @@ export const SettingsWindow = () => {
       return "至少保留一个结果来源";
     }
     const validatePrefix = (value: string, label: string) => {
-      const trimmed = value.trim();
-      if (!trimmed) {
+      if (!value) {
         return `${label} 前缀不能为空`;
       }
-      if (!/^[a-zA-Z]$/.test(trimmed)) {
+      const trimmedStart = value.replace(/^\s+/, "");
+      if (!trimmedStart) {
+        return `${label} 前缀不能为空`;
+      }
+      const firstChar = trimmedStart.charAt(0);
+      if (!/^[a-zA-Z]$/.test(firstChar)) {
         return `${label} 前缀需为单个字母`;
+      }
+      const remainder = trimmedStart.slice(1);
+      if (remainder && remainder !== " " && remainder !== ":") {
+        return `${label} 前缀仅支持可选的空格或冒号结尾`;
       }
       return null;
     };
@@ -304,15 +333,25 @@ export const SettingsWindow = () => {
 
   const handleHotkeyInputKeyDown = useCallback(
     (event: InputKeyboardEvent<HTMLInputElement>) => {
-      if (draft?.auto_hotkey_capture) {
+      if (isCapturingHotkey) {
         event.preventDefault();
         event.stopPropagation();
+
+        if (event.key === "Escape") {
+          setIsCapturingHotkey(false);
+          showToast("已取消捕捉");
+          return;
+        }
+
         if (event.repeat) {
           return;
         }
+
         const shortcut = buildShortcutFromEvent(event);
         if (shortcut) {
           updateDraftValue("global_hotkey", shortcut);
+          setIsCapturingHotkey(false);
+          showToast(`快捷键已更新为 ${shortcut}`);
         } else {
           showToast("请按下至少一个非修饰键");
         }
@@ -324,13 +363,40 @@ export const SettingsWindow = () => {
         void handleSettingsSave();
       }
     },
-    [draft?.auto_hotkey_capture, handleSettingsSave, showToast, updateDraftValue],
+    [handleSettingsSave, isCapturingHotkey, showToast, updateDraftValue],
   );
+
+  const handleHotkeyInputBlur = useCallback(() => {
+    if (isCapturingHotkey) {
+      setIsCapturingHotkey(false);
+    }
+  }, [isCapturingHotkey]);
+
+  const handleHotkeyCaptureButtonClick = useCallback(() => {
+    if (!draft) {
+      return;
+    }
+    setIsCapturingHotkey((prev) => {
+      if (prev) {
+        showToast("已取消捕捉");
+        return false;
+      }
+      showToast("正在监听：按组合键或按 Esc 取消");
+      requestAnimationFrame(() => {
+        if (hotkeyInputRef.current) {
+          hotkeyInputRef.current.focus();
+          hotkeyInputRef.current.select();
+        }
+      });
+      return true;
+    });
+  }, [draft, showToast]);
 
   const handleReset = useCallback(() => {
     if (settings) {
       setDraft({ ...settings });
       setActiveSection("general");
+      setIsCapturingHotkey(false);
       applyWindowOpacityVariable(settings.window_opacity);
       showToast("已恢复保存的配置");
     }
@@ -355,37 +421,31 @@ export const SettingsWindow = () => {
             <span className="settings-chip">前台</span>
           </header>
           <div className="settings-input-row">
-            <input
-              ref={hotkeyInputRef}
-              type="text"
-              value={draft.global_hotkey}
-              onChange={(event: ChangeEvent<HTMLInputElement>) =>
-                updateDraftValue("global_hotkey", event.currentTarget.value)
-              }
-              onKeyDown={handleHotkeyInputKeyDown}
-              className="settings-input"
-              placeholder="例如 Alt+Space"
-              readOnly={draft.auto_hotkey_capture}
-            />
+            <div className="settings-hotkey-control">
+              <input
+                ref={hotkeyInputRef}
+                type="text"
+                value={draft.global_hotkey}
+                readOnly
+                onKeyDown={handleHotkeyInputKeyDown}
+                onBlur={handleHotkeyInputBlur}
+                className="settings-input"
+                placeholder="点击右侧按钮以捕捉"
+              />
+              <button
+                type="button"
+                className={`ghost-button ghost-button--compact ${isCapturingHotkey ? "ghost-button--capturing" : ""}`}
+                onClick={handleHotkeyCaptureButtonClick}
+              >
+                {isCapturingHotkey ? "停止捕捉" : "捕捉快捷键"}
+              </button>
+            </div>
             <span className="settings-hint">
-              {draft.auto_hotkey_capture
-                ? "已开启监听：点击输入框后直接按下组合键"
-                : "用 \"+\" 连接组合键，如 Ctrl+Shift+P"}
+              {isCapturingHotkey
+                ? "正在监听：按下组合键或按 Esc 取消"
+                : "点击“捕捉快捷键”后直接按键，无需手动输入"}
             </span>
           </div>
-          <button
-            type="button"
-            className={`settings-toggle ${draft.auto_hotkey_capture ? "on" : "off"}`}
-            onClick={() => toggleBoolean("auto_hotkey_capture")}
-          >
-            <span className="toggle-pill" aria-hidden="true" />
-            <div>
-              <div className="toggle-title">启用快捷键监听</div>
-              <div className="toggle-subtitle">
-                开启后无需手动输入组合键，直接按键即可写入
-              </div>
-            </div>
-          </button>
         </article>
         <article className="settings-card">
           <header className="settings-card__header">
@@ -605,7 +665,7 @@ export const SettingsWindow = () => {
               <input
                 id="prefix_app"
                 type="text"
-                maxLength={1}
+                maxLength={2}
                 className="settings-input settings-input--small"
                 value={draft.prefix_app}
                 onChange={(event: ChangeEvent<HTMLInputElement>) =>
@@ -613,7 +673,7 @@ export const SettingsWindow = () => {
                 }
               />
               <span className="settings-hint">
-                例如 "a"，输入 a 空格 即切换
+                例如 "a " 或 "a:", 更贴近 Flow 的前缀体验
               </span>
             </div>
             <div className="settings-prefix-row">
@@ -626,14 +686,14 @@ export const SettingsWindow = () => {
               <input
                 id="prefix_bookmark"
                 type="text"
-                maxLength={1}
+                maxLength={2}
                 className="settings-input settings-input--small"
                 value={draft.prefix_bookmark}
                 onChange={(event: ChangeEvent<HTMLInputElement>) =>
                   updateDraftValue("prefix_bookmark", event.currentTarget.value)
                 }
               />
-              <span className="settings-hint">例如 "b"</span>
+              <span className="settings-hint">例如 "b "，在输入 b+空格 时切换</span>
             </div>
             <div className="settings-prefix-row">
               <label className="settings-prefix-label" htmlFor="prefix_search">
@@ -642,14 +702,14 @@ export const SettingsWindow = () => {
               <input
                 id="prefix_search"
                 type="text"
-                maxLength={1}
+                maxLength={2}
                 className="settings-input settings-input--small"
                 value={draft.prefix_search}
                 onChange={(event: ChangeEvent<HTMLInputElement>) =>
                   updateDraftValue("prefix_search", event.currentTarget.value)
                 }
               />
-              <span className="settings-hint">例如 "s"</span>
+              <span className="settings-hint">例如 "s"、"s:" 或 "s "</span>
             </div>
           </div>
         </article>

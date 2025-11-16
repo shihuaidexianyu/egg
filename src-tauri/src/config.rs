@@ -31,8 +31,6 @@ pub struct AppConfig {
     pub debug_mode: bool,
     #[serde(default = "default_window_opacity")]
     pub window_opacity: f32,
-    #[serde(default = "default_auto_hotkey_capture")]
-    pub auto_hotkey_capture: bool,
 }
 
 impl Default for AppConfig {
@@ -50,7 +48,6 @@ impl Default for AppConfig {
             force_english_input: default_force_english_input(),
             debug_mode: default_debug_mode(),
             window_opacity: default_window_opacity(),
-            auto_hotkey_capture: default_auto_hotkey_capture(),
         }
     }
 }
@@ -72,15 +69,15 @@ const fn default_enable_bookmark_results() -> bool {
 }
 
 fn default_prefix_app() -> String {
-    "r".to_string()
+    "R".to_string()
 }
 
 fn default_prefix_bookmark() -> String {
-    "b".to_string()
+    "B".to_string()
 }
 
 fn default_prefix_search() -> String {
-    "s".to_string()
+    "S".to_string()
 }
 
 const fn default_launch_on_startup() -> bool {
@@ -92,10 +89,6 @@ const fn default_force_english_input() -> bool {
 }
 
 const fn default_debug_mode() -> bool {
-    false
-}
-
-const fn default_auto_hotkey_capture() -> bool {
     false
 }
 
