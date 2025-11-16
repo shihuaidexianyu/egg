@@ -1,3 +1,5 @@
+use std::sync::atomic::Ordering;
+
 use tauri::{AppHandle, Manager};
 use tauri_plugin_global_shortcut::{GlobalShortcutExt, ShortcutState};
 
@@ -27,12 +29,17 @@ pub fn bind_hotkey(
     let hotkey_string = hotkey.trim().to_string();
     let shortcut_literal = hotkey_string.clone();
     let window_label_string = window_label.to_string();
+    let capture_guard = state.hotkey_capture_suspended.clone();
     app_handle
         .global_shortcut()
         .on_shortcut(shortcut_literal.as_str(), {
             let window_label = window_label_string;
+            let capture_guard = capture_guard.clone();
             move |app_handle, _, event| {
                 if event.state == ShortcutState::Pressed {
+                    if capture_guard.load(Ordering::SeqCst) {
+                        return;
+                    }
                     if let Some(window) = app_handle.get_webview_window(&window_label) {
                         if window.is_visible().unwrap_or(false) {
                             let _ = window.hide();

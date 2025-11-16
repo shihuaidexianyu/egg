@@ -2,6 +2,7 @@ mod bookmarks;
 mod commands;
 mod config;
 mod hotkey;
+mod hotkey_capture;
 mod indexer;
 mod models;
 mod state;
@@ -9,8 +10,9 @@ mod text_utils;
 mod windows_utils;
 
 use commands::{
-    execute_action, get_settings, submit_query, trigger_reindex, update_hotkey, update_settings,
-    FOCUS_INPUT_EVENT, HIDE_WINDOW_EVENT, OPEN_SETTINGS_EVENT,
+    begin_hotkey_capture, end_hotkey_capture, execute_action, get_settings, submit_query,
+    trigger_reindex, update_hotkey, update_settings, FOCUS_INPUT_EVENT, HIDE_WINDOW_EVENT,
+    OPEN_SETTINGS_EVENT,
 };
 use config::AppConfig;
 use hotkey::bind_hotkey;
@@ -39,6 +41,8 @@ pub fn run() {
             execute_action,
             trigger_reindex,
             get_settings,
+            begin_hotkey_capture,
+            end_hotkey_capture,
             update_hotkey,
             update_settings
         ])

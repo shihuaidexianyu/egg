@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { ChangeEvent, KeyboardEvent as InputKeyboardEvent } from "react";
 import { invoke } from "@tauri-apps/api/core";
+import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import { getVersion } from "@tauri-apps/api/app";
 import type { AppSettings } from "../types";
 import { Toast } from "./Toast";
@@ -14,78 +15,8 @@ const MIN_WINDOW_OPACITY_PERCENT = 60;
 const MAX_WINDOW_OPACITY_PERCENT = 100;
 const MIN_WINDOW_OPACITY = MIN_WINDOW_OPACITY_PERCENT / 100;
 const MAX_WINDOW_OPACITY = MAX_WINDOW_OPACITY_PERCENT / 100;
-const IS_MAC = navigator.userAgent.toLowerCase().includes("mac");
-const MODIFIER_KEYS = new Set(["shift", "control", "alt", "meta"]);
-const KEY_NAME_MAP: Record<string, string> = {
-  Escape: "Esc",
-  " ": "Space",
-  Spacebar: "Space",
-  ArrowUp: "Up",
-  ArrowDown: "Down",
-  ArrowLeft: "Left",
-  ArrowRight: "Right",
-  Enter: "Enter",
-  Tab: "Tab",
-  Backspace: "Backspace",
-  Delete: "Delete",
-  Insert: "Insert",
-  Home: "Home",
-  End: "End",
-  PageUp: "PageUp",
-  PageDown: "PageDown",
-};
-
-const normalizeHotkeyKey = (key: string): string | null => {
-  if (!key) {
-    return null;
-  }
-  if (KEY_NAME_MAP[key]) {
-    return KEY_NAME_MAP[key];
-  }
-  if (/^F\d{1,2}$/i.test(key)) {
-    return key.toUpperCase();
-  }
-  if (key.length === 1) {
-    return key.toUpperCase();
-  }
-  return key.length ? key : null;
-};
-
-const buildShortcutFromEvent = (
-  event: InputKeyboardEvent<HTMLInputElement>,
-): string | null => {
-  const keyLower = event.key.toLowerCase();
-  const parts: string[] = [];
-
-  if (event.ctrlKey || keyLower === "control") {
-    parts.push("Ctrl");
-  }
-  if (event.shiftKey || keyLower === "shift") {
-    parts.push("Shift");
-  }
-  if (event.altKey || keyLower === "alt") {
-    parts.push("Alt");
-  }
-  if (event.metaKey || keyLower === "meta") {
-    parts.push(IS_MAC ? "Cmd" : "Win");
-  }
-
-  const normalizedKey = normalizeHotkeyKey(event.key);
-  if (!normalizedKey) {
-    return null;
-  }
-
-  if (MODIFIER_KEYS.has(keyLower)) {
-    return null;
-  }
-
-  parts.push(normalizedKey);
-  const deduped = Array.from(new Set(parts));
-  const isFunctionKey = /^F\d{1,2}$/i.test(normalizedKey);
-  if (!isFunctionKey && deduped.length === 1) {
-    return null;
-  }
-  return deduped.join("+");
+type HotkeyCapturePayload = {
+  shortcut: string;
 };
 
 type SettingsSectionId = "general" | "search" | "about";
@@ -132,6 +63,8 @@ export const SettingsWindow = () => {
   const [toastMessage, setToastMessage] = useState<string | null>(null);
   const [appVersion, setAppVersion] = useState("--");
   const [isCapturingHotkey, setIsCapturingHotkey] = useState(false);
+  const [hotkeyInputValue, setHotkeyInputValue] = useState("");
+  const [isHotkeyEditing, setIsHotkeyEditing] = useState(false);
   const hotkeyInputRef = useRef<HTMLInputElement | null>(null);
   const toastTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const debugModeEffective = draft?.debug_mode ?? settings?.debug_mode ?? false;
@@ -197,6 +130,7 @@ export const SettingsWindow = () => {
     }
     const handleWindowBlur = () => {
       setIsCapturingHotkey(false);
+      void invoke("end_hotkey_capture");
     };
     window.addEventListener("blur", handleWindowBlur);
     return () => {
@@ -223,12 +157,68 @@ export const SettingsWindow = () => {
     }
   }, [draft?.window_opacity]);
 
+  useEffect(() => {
+    if (!isHotkeyEditing) {
+      setHotkeyInputValue(draft?.global_hotkey ?? "");
+    }
+  }, [draft?.global_hotkey, isHotkeyEditing]);
+
   const updateDraftValue = useCallback(
     <K extends keyof AppSettings>(key: K, value: AppSettings[K]) => {
       setDraft((prev) => (prev ? { ...prev, [key]: value } : prev));
     },
     [],
   );
+
+  useEffect(() => {
+    let unlistenResult: UnlistenFn | null = null;
+    let unlistenCancel: UnlistenFn | null = null;
+    let unlistenInvalid: UnlistenFn | null = null;
+
+    const registerListeners = async () => {
+      try {
+        unlistenResult = await listen<HotkeyCapturePayload>(
+          "hotkey_capture_result",
+          (event) => {
+            setIsCapturingHotkey(false);
+            setIsHotkeyEditing(false);
+            updateDraftValue("global_hotkey", event.payload.shortcut);
+            setHotkeyInputValue(event.payload.shortcut);
+            showToast(`快捷键已更新为 ${event.payload.shortcut}`);
+          },
+        );
+        unlistenCancel = await listen("hotkey_capture_cancelled", () => {
+          setIsCapturingHotkey(false);
+          showToast("捕捉已取消");
+        });
+        unlistenInvalid = await listen("hotkey_capture_invalid", () => {
+          showToast("请按下至少一个非修饰键或使用功能键");
+        });
+      } catch (error) {
+        console.error("Failed to register hotkey capture listeners", error);
+      }
+    };
+
+    void registerListeners();
+
+    return () => {
+      if (unlistenResult) {
+        unlistenResult();
+      }
+      if (unlistenCancel) {
+        unlistenCancel();
+      }
+      if (unlistenInvalid) {
+        unlistenInvalid();
+      }
+    };
+  }, [showToast, updateDraftValue]);
+
+  useEffect(() => {
+    return () => {
+      void invoke("end_hotkey_capture");
+    };
+  }, []);
 
   const toggleBoolean = useCallback((key: BooleanSettingKey) => {
     setDraft((prev) => (prev ? { ...prev, [key]: !prev[key] } : prev));
@@ -331,30 +321,31 @@ export const SettingsWindow = () => {
     }
   }, [draft, showToast, validationMessage]);
 
+  const normalizeHotkeyInput = useCallback((value: string) => {
+    return value
+      .split("+")
+      .map((segment) => segment.trim())
+      .filter(Boolean)
+      .join("+");
+  }, []);
+
+  const handleHotkeyInputChange = useCallback(
+    (event: ChangeEvent<HTMLInputElement>) => {
+      if (isCapturingHotkey) {
+        return;
+      }
+      const rawValue = event.currentTarget.value;
+      setHotkeyInputValue(rawValue);
+      const normalized = normalizeHotkeyInput(rawValue);
+      updateDraftValue("global_hotkey", normalized);
+    },
+    [isCapturingHotkey, normalizeHotkeyInput, updateDraftValue],
+  );
+
   const handleHotkeyInputKeyDown = useCallback(
     (event: InputKeyboardEvent<HTMLInputElement>) => {
       if (isCapturingHotkey) {
         event.preventDefault();
-        event.stopPropagation();
-
-        if (event.key === "Escape") {
-          setIsCapturingHotkey(false);
-          showToast("已取消捕捉");
-          return;
-        }
-
-        if (event.repeat) {
-          return;
-        }
-
-        const shortcut = buildShortcutFromEvent(event);
-        if (shortcut) {
-          updateDraftValue("global_hotkey", shortcut);
-          setIsCapturingHotkey(false);
-          showToast(`快捷键已更新为 ${shortcut}`);
-        } else {
-          showToast("请按下至少一个非修饰键");
-        }
         return;
       }
 
@@ -363,24 +354,37 @@ export const SettingsWindow = () => {
         void handleSettingsSave();
       }
     },
-    [handleSettingsSave, isCapturingHotkey, showToast, updateDraftValue],
+    [handleSettingsSave, isCapturingHotkey],
   );
 
   const handleHotkeyInputBlur = useCallback(() => {
+    setIsHotkeyEditing(false);
     if (isCapturingHotkey) {
       setIsCapturingHotkey(false);
+      void invoke("end_hotkey_capture");
     }
-  }, [isCapturingHotkey]);
+    setHotkeyInputValue(draft?.global_hotkey ?? "");
+  }, [draft?.global_hotkey, isCapturingHotkey]);
 
-  const handleHotkeyCaptureButtonClick = useCallback(() => {
+  const handleHotkeyInputFocus = useCallback(() => {
+    setIsHotkeyEditing(true);
+  }, []);
+
+  const handleHotkeyCaptureButtonClick = useCallback(async () => {
     if (!draft) {
       return;
     }
-    setIsCapturingHotkey((prev) => {
-      if (prev) {
-        showToast("已取消捕捉");
-        return false;
-      }
+
+    if (isCapturingHotkey) {
+      setIsCapturingHotkey(false);
+      showToast("已取消捕捉");
+      await invoke("end_hotkey_capture");
+      return;
+    }
+
+    try {
+      await invoke("begin_hotkey_capture");
+      setIsCapturingHotkey(true);
       showToast("正在监听：按组合键或按 Esc 取消");
       requestAnimationFrame(() => {
         if (hotkeyInputRef.current) {
@@ -388,17 +392,22 @@ export const SettingsWindow = () => {
           hotkeyInputRef.current.select();
         }
       });
-      return true;
-    });
-  }, [draft, showToast]);
+    } catch (error) {
+      console.error("Failed to start hotkey capture", error);
+      showToast("无法开始捕捉");
+    }
+  }, [draft, isCapturingHotkey, showToast]);
 
   const handleReset = useCallback(() => {
     if (settings) {
       setDraft({ ...settings });
       setActiveSection("general");
       setIsCapturingHotkey(false);
+      setIsHotkeyEditing(false);
+      setHotkeyInputValue(settings.global_hotkey);
       applyWindowOpacityVariable(settings.window_opacity);
       showToast("已恢复保存的配置");
+      void invoke("end_hotkey_capture");
     }
   }, [settings, showToast]);
 
@@ -425,9 +434,11 @@ export const SettingsWindow = () => {
               <input
                 ref={hotkeyInputRef}
                 type="text"
-                value={draft.global_hotkey}
-                readOnly
+                value={hotkeyInputValue}
+                readOnly={isCapturingHotkey}
+                onChange={handleHotkeyInputChange}
                 onKeyDown={handleHotkeyInputKeyDown}
+                onFocus={handleHotkeyInputFocus}
                 onBlur={handleHotkeyInputBlur}
                 className="settings-input"
                 placeholder="点击右侧按钮以捕捉"
@@ -441,9 +452,11 @@ export const SettingsWindow = () => {
               </button>
             </div>
             <span className="settings-hint">
+              当前模式：{isCapturingHotkey ? "监听（系统级捕捉）" : "输入（可手动编辑文本）"}。
+              {" "}
               {isCapturingHotkey
-                ? "正在监听：按下组合键或按 Esc 取消"
-                : "点击“捕捉快捷键”后直接按键，无需手动输入"}
+                ? "按下组合键或按 Esc 取消，期间主窗口热键会被暂时屏蔽"
+                : "如需完全模仿 Flow Launcher 的捕捉，请点击右侧按钮进入监听模式"}
             </span>
           </div>
         </article>

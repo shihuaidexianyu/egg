@@ -32,7 +32,7 @@ use crate::{
     bookmarks::{self, BookmarkEntry},
     config::AppConfig,
     hotkey::bind_hotkey,
-    indexer,
+    hotkey_capture, indexer,
     models::{AppType, ApplicationInfo, SearchResult},
     state::{AppState, PendingAction},
 };
@@ -425,6 +425,19 @@ pub fn update_hotkey(
         app_handle,
         state,
     )
+}
+
+#[tauri::command]
+pub fn begin_hotkey_capture(
+    app_handle: AppHandle,
+    state: State<'_, AppState>,
+) -> Result<(), String> {
+    hotkey_capture::start(app_handle, state.inner().clone())
+}
+
+#[tauri::command]
+pub fn end_hotkey_capture() -> Result<(), String> {
+    hotkey_capture::stop()
 }
 
 fn normalize_query_delay(candidate: Option<u64>, current: u64) -> u64 {

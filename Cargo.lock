@@ -3789,6 +3789,7 @@ dependencies = [
  "fuzzy-matcher",
  "image",
  "log",
+ "once_cell",
  "pinyin",
  "serde",
  "serde_json",

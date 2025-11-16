@@ -1,6 +1,6 @@
 use std::{
     collections::HashMap,
-    sync::{Arc, Mutex},
+    sync::{atomic::AtomicBool, Arc, Mutex},
 };
 
 use crate::{bookmarks::BookmarkEntry, config::AppConfig, models::ApplicationInfo};
@@ -13,13 +13,14 @@ pub enum PendingAction {
     Search(String),
 }
 
-#[derive(Default)]
+#[derive(Default, Clone)]
 pub struct AppState {
     pub app_index: Arc<Mutex<Vec<ApplicationInfo>>>,
     pub bookmark_index: Arc<Mutex<Vec<BookmarkEntry>>>,
     pub config: Arc<Mutex<AppConfig>>,
     pub registered_hotkey: Arc<Mutex<Option<String>>>,
     pub pending_actions: Arc<Mutex<HashMap<String, PendingAction>>>,
+    pub hotkey_capture_suspended: Arc<AtomicBool>,
 }
 
 impl AppState {
@@ -30,6 +31,7 @@ impl AppState {
             config: Arc::new(Mutex::new(AppConfig::default())),
             registered_hotkey: Arc::new(Mutex::new(None)),
             pending_actions: Arc::new(Mutex::new(HashMap::new())),
+            hotkey_capture_suspended: Arc::new(AtomicBool::new(false)),
         }
     }
 }
