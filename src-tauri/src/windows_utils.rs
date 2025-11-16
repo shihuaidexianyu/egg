@@ -78,6 +78,14 @@ pub(crate) struct ShortcutInfo {
     pub icon_index: i32,
 }
 
+#[derive(Debug, Clone)]
+pub(crate) struct InternetShortcutInfo {
+    pub url: String,
+    pub icon_path: Option<String>,
+    pub icon_index: i32,
+    pub description: Option<String>,
+}
+
 /// Resolves `.lnk` shortcuts and extracts metadata such as target executable, arguments and icon info.
 pub(crate) fn resolve_shell_link(path: &Path) -> Option<ShortcutInfo> {
     #[cfg(target_os = "windows")]
@@ -154,6 +162,69 @@ pub(crate) fn resolve_shell_link(path: &Path) -> Option<ShortcutInfo> {
         let _ = path;
         None
     }
+}
+
+/// Parses a `.url` Internet shortcut and extracts the target URL plus optional icon metadata.
+pub(crate) fn parse_internet_shortcut(path: &Path) -> Option<InternetShortcutInfo> {
+    let bytes = fs::read(path).ok()?;
+    if bytes.is_empty() {
+        return None;
+    }
+
+    let content = decode_shortcut_contents(&bytes)?;
+    let mut in_section = false;
+    let mut url = None;
+    let mut icon_path = None;
+    let mut icon_index = 0i32;
+    let mut description = None;
+
+    for raw_line in content.lines() {
+        let line = raw_line.trim();
+        if line.is_empty() || line.starts_with(';') {
+            continue;
+        }
+
+        if line.starts_with('[') && line.ends_with(']') {
+            in_section = line.eq_ignore_ascii_case("[internetshortcut]");
+            continue;
+        }
+
+        if !in_section {
+            continue;
+        }
+
+        let Some((key, value)) = line.split_once('=') else {
+            continue;
+        };
+
+        let key_lower = key.trim().to_ascii_lowercase();
+        let cleaned_value = value.trim().trim_matches(|c| c == '\'' || c == '"');
+        if cleaned_value.is_empty() {
+            continue;
+        }
+
+        match key_lower.as_str() {
+            "url" => url = Some(cleaned_value.to_string()),
+            "iconfile" => icon_path = Some(cleaned_value.to_string()),
+            "iconindex" => {
+                if let Ok(parsed) = cleaned_value.parse::<i32>() {
+                    icon_index = parsed;
+                }
+            }
+            "description" | "comment" => {
+                description = Some(cleaned_value.to_string());
+            }
+            _ => {}
+        }
+    }
+
+    let url = url?;
+    Some(InternetShortcutInfo {
+        url,
+        icon_path,
+        icon_index,
+        description,
+    })
 }
 
 /// Converts an [`OsStr`] into a null-terminated wide string buffer suitable for Win32 APIs.
@@ -274,6 +345,33 @@ fn cache_file_path(key: &str) -> Option<PathBuf> {
     let mut dir = icon_cache_dir()?;
     dir.push(format!("{key}.b64"));
     Some(dir)
+}
+
+fn decode_shortcut_contents(bytes: &[u8]) -> Option<String> {
+    if bytes.starts_with(&[0xFF, 0xFE]) {
+        Some(decode_utf16(&bytes[2..], true))
+    } else if bytes.starts_with(&[0xFE, 0xFF]) {
+        Some(decode_utf16(&bytes[2..], false))
+    } else {
+        let mut text = String::from_utf8_lossy(bytes).into_owned();
+        if let Some(stripped) = text.strip_prefix('\u{feff}') {
+            text = stripped.to_string();
+        }
+        Some(text)
+    }
+}
+
+fn decode_utf16(data: &[u8], little_endian: bool) -> String {
+    let mut units = Vec::with_capacity(data.len() / 2);
+    for chunk in data.chunks_exact(2) {
+        let value = if little_endian {
+            u16::from_le_bytes([chunk[0], chunk[1]])
+        } else {
+            u16::from_be_bytes([chunk[0], chunk[1]])
+        };
+        units.push(value);
+    }
+    String::from_utf16_lossy(&units)
 }
 
 fn icon_cache_dir() -> Option<PathBuf> {

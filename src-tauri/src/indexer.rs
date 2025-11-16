@@ -16,7 +16,9 @@ use winreg::{enums::*, RegKey};
 use crate::{
     models::{AppType, ApplicationInfo},
     text_utils::extend_keywords_with_pinyin,
-    windows_utils::{expand_env_vars, extract_icon_from_path, resolve_shell_link},
+    windows_utils::{
+        expand_env_vars, extract_icon_from_path, parse_internet_shortcut, resolve_shell_link,
+    },
 };
 
 /// Build the application index by scanning Start Menu shortcuts, installed Win32 software and UWP apps.
@@ -52,14 +54,18 @@ pub async fn build_index() -> Vec<ApplicationInfo> {
     }
 
     // De-duplicate by resolved target path while keeping Start Menu preference over registry entries.
-    let mut seen: HashSet<(AppType, String)> = HashSet::new();
+    let mut seen: HashSet<(AppType, String, Option<String>)> = HashSet::new();
     results.retain(|app| {
         let key_path = app
             .source_path
             .as_ref()
             .unwrap_or(&app.path)
             .to_ascii_lowercase();
-        seen.insert((app.app_type.clone(), key_path))
+        let argument_key = app
+            .arguments
+            .as_ref()
+            .map(|value| value.to_ascii_lowercase());
+        seen.insert((app.app_type.clone(), key_path, argument_key))
     });
     results.sort_by(|a, b| a.name.to_lowercase().cmp(&b.name.to_lowercase()));
     results
@@ -68,6 +74,8 @@ const UNINSTALL_SUBKEYS: &[&str] = &[
     r"SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall",
     r"SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall",
 ];
+
+const SUPPORTED_URL_PROTOCOLS: &[&str] = &["steam://", "com.epicgames.launcher://apps/"];
 
 fn enumerate_start_menu_programs() -> Vec<ApplicationInfo> {
     let startup_dirs = startup_directories();
@@ -104,17 +112,23 @@ fn enumerate_start_menu_programs() -> Vec<ApplicationInfo> {
                     continue;
                 }
 
-                let is_lnk = path
+                let extension = path
                     .extension()
                     .and_then(|ext| ext.to_str())
-                    .map(|ext| ext.eq_ignore_ascii_case("lnk"))
-                    .unwrap_or(false);
-                if !is_lnk {
-                    continue;
-                }
+                    .map(|ext| ext.to_ascii_lowercase());
 
-                if let Some(app) = shortcut_to_application(&path) {
-                    applications.push(app);
+                match extension.as_deref() {
+                    Some("lnk") => {
+                        if let Some(app) = shortcut_to_application(&path) {
+                            applications.push(app);
+                        }
+                    }
+                    Some("url") => {
+                        if let Some(app) = internet_shortcut_to_application(&path) {
+                            applications.push(app);
+                        }
+                    }
+                    _ => {}
                 }
             }
         }
@@ -181,6 +195,22 @@ fn shortcut_to_application(path: &Path) -> Option<ApplicationInfo> {
         .description
         .filter(|value| !value.trim().is_empty());
     let path_string = path.to_string_lossy().into_owned();
+    let working_directory = shortcut.working_directory.and_then(|value| {
+        let trimmed = value.trim();
+        if trimmed.is_empty() {
+            None
+        } else {
+            Some(trimmed.to_string())
+        }
+    });
+    let arguments = shortcut.arguments.and_then(|value| {
+        let trimmed = value.trim();
+        if trimmed.is_empty() {
+            None
+        } else {
+            Some(trimmed.to_string())
+        }
+    });
 
     Some(ApplicationInfo {
         id: format!("win32:startmenu:{}", path_string.to_lowercase()),
@@ -191,6 +221,68 @@ fn shortcut_to_application(path: &Path) -> Option<ApplicationInfo> {
         icon_b64,
         description,
         keywords,
+        working_directory,
+        arguments,
+    })
+}
+
+fn internet_shortcut_to_application(path: &Path) -> Option<ApplicationInfo> {
+    let shortcut = parse_internet_shortcut(path)?;
+    let url = shortcut.url.trim();
+    if url.is_empty() {
+        return None;
+    }
+
+    let normalized_url = url.to_string();
+    let lower_url = normalized_url.to_ascii_lowercase();
+    if !SUPPORTED_URL_PROTOCOLS
+        .iter()
+        .any(|prefix| lower_url.starts_with(prefix))
+    {
+        return None;
+    }
+
+    let name = path
+        .file_stem()
+        .and_then(|value| value.to_str())?
+        .trim()
+        .to_string();
+    if name.is_empty() {
+        return None;
+    }
+
+    let mut keywords = vec![name.clone(), normalized_url.clone()];
+    if let Some(desc) = shortcut
+        .description
+        .as_ref()
+        .map(|value| value.trim())
+        .filter(|value| !value.is_empty())
+    {
+        keywords.push(desc.to_string());
+    }
+    extend_keywords_with_pinyin(&mut keywords);
+    keywords.sort();
+    keywords.dedup();
+
+    let icon_candidate = shortcut.icon_path.as_deref().and_then(sanitize_icon_source);
+    let icon_source = icon_candidate.unwrap_or_else(|| path.to_string_lossy().into_owned());
+    let icon_b64 = extract_icon_from_path(&icon_source, shortcut.icon_index).unwrap_or_default();
+    let path_string = path.to_string_lossy().into_owned();
+    let description = shortcut
+        .description
+        .filter(|value| !value.trim().is_empty());
+
+    Some(ApplicationInfo {
+        id: format!("win32:url:{}", path_string.to_lowercase()),
+        name,
+        path: path_string,
+        source_path: Some(normalized_url),
+        app_type: AppType::Win32,
+        icon_b64,
+        description,
+        keywords,
+        working_directory: None,
+        arguments: None,
     })
 }
 
@@ -346,6 +438,8 @@ fn registry_entry_to_app(
         icon_b64,
         description,
         keywords,
+        working_directory: None,
+        arguments: None,
     })
 }
 
@@ -478,6 +572,8 @@ async fn enumerate_uwp_apps() -> WinResult<Vec<ApplicationInfo>> {
                 icon_b64,
                 description,
                 keywords,
+                working_directory: None,
+                arguments: None,
             });
         }
     }

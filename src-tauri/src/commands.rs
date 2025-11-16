@@ -1,4 +1,10 @@
-use std::{collections::HashMap, path::Path, ptr, sync::Arc};
+use std::{
+    collections::HashMap,
+    ffi::{OsStr, OsString},
+    path::Path,
+    ptr,
+    sync::Arc,
+};
 
 use fuzzy_matcher::skim::SkimMatcherV2;
 use fuzzy_matcher::FuzzyMatcher;
@@ -439,8 +445,12 @@ fn launch_win32_app(app: &ApplicationInfo) -> Result<(), String> {
         Ok(_) => Ok(()),
         Err(primary_err) => {
             if let Some(source) = &app.source_path {
-                let fallback = Path::new(source);
-                shell_execute_path(fallback)
+                launch_from_source(
+                    source,
+                    app.arguments.as_deref(),
+                    app.working_directory.as_deref(),
+                )
+                .or(Err(primary_err))
             } else {
                 Err(primary_err)
             }
@@ -453,26 +463,7 @@ fn shell_execute_path(path: &Path) -> Result<(), String> {
         return Err("目标程序不存在或已被移动".into());
     }
 
-    let wide_path = os_str_to_wide(path.as_os_str());
-    let result = unsafe {
-        ShellExecuteW(
-            HWND(ptr::null_mut()),
-            PCWSTR::null(),
-            PCWSTR(wide_path.as_ptr()),
-            PCWSTR::null(),
-            PCWSTR::null(),
-            SW_SHOWNORMAL,
-        )
-    };
-
-    if result.0 as isize <= 32 {
-        Err(format!(
-            "无法启动程序 (ShellExecute 错误码 {})",
-            result.0 as isize
-        ))
-    } else {
-        Ok(())
-    }
+    shell_execute_internal(path.as_os_str(), None, None)
 }
 
 fn launch_uwp_app(app_id: &str) -> Result<(), String> {
@@ -514,6 +505,89 @@ fn match_application(matcher: &SkimMatcherV2, app: &ApplicationInfo, query: &str
     }
 
     best
+}
+
+fn launch_from_source(
+    source: &str,
+    arguments: Option<&str>,
+    working_directory: Option<&str>,
+) -> Result<(), String> {
+    let normalized = source.trim().trim_matches(|c| c == '"' || c == '\'');
+    if normalized.is_empty() {
+        return Err("备用路径无效".into());
+    }
+
+    if normalized.contains("://") && !Path::new(normalized).exists() {
+        return shell_execute_uri(normalized);
+    }
+
+    shell_execute_raw(normalized, arguments, working_directory)
+}
+
+fn shell_execute_raw(
+    target: &str,
+    arguments: Option<&str>,
+    working_directory: Option<&str>,
+) -> Result<(), String> {
+    let target_os = OsString::from(target);
+    let argument_os = arguments
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(OsString::from);
+    let working_dir_os = working_directory
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(OsString::from);
+
+    shell_execute_internal(
+        target_os.as_os_str(),
+        argument_os.as_deref(),
+        working_dir_os.as_deref(),
+    )
+}
+
+fn shell_execute_uri(uri: &str) -> Result<(), String> {
+    let uri_os = OsString::from(uri);
+    shell_execute_internal(uri_os.as_os_str(), None, None)
+}
+
+fn shell_execute_internal(
+    target: &OsStr,
+    arguments: Option<&OsStr>,
+    working_directory: Option<&OsStr>,
+) -> Result<(), String> {
+    let file_buffer = os_str_to_wide(target);
+    let arg_buffer = arguments.map(os_str_to_wide);
+    let dir_buffer = working_directory.map(os_str_to_wide);
+
+    let arg_ptr = arg_buffer
+        .as_ref()
+        .map(|value| PCWSTR(value.as_ptr()))
+        .unwrap_or(PCWSTR::null());
+    let dir_ptr = dir_buffer
+        .as_ref()
+        .map(|value| PCWSTR(value.as_ptr()))
+        .unwrap_or(PCWSTR::null());
+
+    let result = unsafe {
+        ShellExecuteW(
+            HWND(ptr::null_mut()),
+            PCWSTR::null(),
+            PCWSTR(file_buffer.as_ptr()),
+            arg_ptr,
+            dir_ptr,
+            SW_SHOWNORMAL,
+        )
+    };
+
+    if result.0 as isize <= 32 {
+        Err(format!(
+            "无法启动程序 (ShellExecute 错误码 {})",
+            result.0 as isize
+        ))
+    } else {
+        Ok(())
+    }
 }
 
 fn match_bookmark(matcher: &SkimMatcherV2, bookmark: &BookmarkEntry, query: &str) -> Option<i64> {

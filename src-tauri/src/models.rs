@@ -16,6 +16,8 @@ pub struct ApplicationInfo {
     pub icon_b64: String,
     pub description: Option<String>,
     pub keywords: Vec<String>,
+    pub working_directory: Option<String>,
+    pub arguments: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]
