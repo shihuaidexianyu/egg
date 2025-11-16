@@ -61,21 +61,31 @@ pub fn start(app_handle: AppHandle, state: AppState) -> Result<(), String> {
         }
 
         let (shortcuts, display_map) = build_shortcut_catalog();
-        let registration_list = shortcuts.iter().map(|s| s.as_str()).collect::<Vec<_>>();
         let handler_app = app_handle.clone();
-        if let Err(err) = app_handle.global_shortcut().on_shortcuts(
-            registration_list,
-            move |app, shortcut, event| {
-                handle_shortcut_event(app, shortcut, event);
-            },
-        ) {
-            log::error!("注册快捷键捕捉监听失败: {err}");
+        let mut registered_shortcuts = Vec::new();
+
+        for literal in &shortcuts {
+            match app_handle.global_shortcut().on_shortcut(
+                literal.as_str(),
+                |app, shortcut, event| {
+                    handle_shortcut_event(app, shortcut, event);
+                },
+            ) {
+                Ok(_) => registered_shortcuts.push(literal.clone()),
+                Err(err) => {
+                    log::debug!("注册快捷键 {literal} 失败: {err}");
+                }
+            }
+        }
+
+        if registered_shortcuts.is_empty() {
+            log::error!("无法注册任何快捷键用于捕捉，放弃启动");
             if let Some(previous) = previous_hotkey.as_deref() {
                 if let Err(rebind_err) = bind_hotkey(&handler_app, &state, previous, "main") {
                     log::error!("恢复快捷键 {previous} 失败: {rebind_err}");
                 }
             }
-            return Err("无法注册快捷键捕捉监听".into());
+            return Err("系统拒绝注册捕捉所需的全局快捷键".into());
         }
 
         state.hotkey_capture_suspended.store(true, Ordering::SeqCst);
@@ -84,7 +94,7 @@ pub fn start(app_handle: AppHandle, state: AppState) -> Result<(), String> {
             app_handle: app_handle.clone(),
             app_state: state.clone(),
             suspension_flag: state.hotkey_capture_suspended.clone(),
-            registered_shortcuts: shortcuts,
+            registered_shortcuts,
             display_map,
             previous_hotkey,
         });
@@ -97,15 +107,13 @@ pub fn stop() -> Result<(), String> {
     stop_internal(None)
 }
 
-fn stop_internal(handle_hint: Option<&AppHandle>) -> Result<(), String> {
+fn stop_internal(handle_hint: Option<AppHandle>) -> Result<(), String> {
     let mut guard = CAPTURE_CONTEXT
         .lock()
         .map_err(|_| "无法访问快捷键捕捉状态".to_string())?;
 
     if let Some(ctx) = guard.take() {
-        let app_handle = handle_hint
-            .cloned()
-            .unwrap_or_else(|| ctx.app_handle.clone());
+        let app_handle = handle_hint.unwrap_or_else(|| ctx.app_handle.clone());
 
         if !ctx.registered_shortcuts.is_empty() {
             let unregister_list = ctx
@@ -142,9 +150,7 @@ fn handle_shortcut_event(app: &AppHandle, shortcut: &Shortcut, event: ShortcutEv
 
     if normalized == ESCAPE_LITERAL {
         let _ = app.emit(HOTKEY_CAPTURE_CANCELLED_EVENT, ());
-        if let Err(err) = stop_internal(Some(app)) {
-            log::error!("停止快捷键捕捉失败: {err}");
-        }
+        enqueue_stop(app.clone());
         return;
     }
 
@@ -157,12 +163,18 @@ fn handle_shortcut_event(app: &AppHandle, shortcut: &Shortcut, event: ShortcutEv
     if let Some(shortcut) = display_value {
         let payload = HotkeyCaptureResultPayload { shortcut };
         let _ = app.emit(HOTKEY_CAPTURE_RESULT_EVENT, payload);
-        if let Err(err) = stop_internal(Some(app)) {
-            log::error!("停止快捷键捕捉失败: {err}");
-        }
+        enqueue_stop(app.clone());
     } else {
         let _ = app.emit(HOTKEY_CAPTURE_INVALID_EVENT, ());
     }
+}
+
+fn enqueue_stop(app_handle: AppHandle) {
+    tauri::async_runtime::spawn_blocking(move || {
+        if let Err(err) = stop_internal(Some(app_handle)) {
+            log::error!("停止快捷键捕捉失败: {err}");
+        }
+    });
 }
 
 fn build_shortcut_catalog() -> (Vec<String>, HashMap<String, String>) {
