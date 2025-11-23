@@ -16,6 +16,7 @@
     "core:window:allow-close",
     "core:window:allow-create",
     "core:window:allow-start-dragging",
+    "core:window:allow-set-size",
     "core:webview:allow-create-webview-window"
   ]
 }

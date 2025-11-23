@@ -1,11 +1,38 @@
 :root {
   color-scheme: dark;
-  font-family: var(--font-family, "Segoe UI", "Segoe UI Variable", Inter, system-ui, -apple-system, sans-serif);
-  font-size: var(--font-size-base, 15px);
-  line-height: var(--line-height-base, 1.5);
-  font-weight: var(--font-weight-base, 400);
-  text-rendering: optimizeLegibility;
-  -webkit-font-smoothing: antialiased;
+  font-family: "Segoe UI", "Segoe UI Variable", "Microsoft YaHei", sans-serif;
+  font-size: 14px;
+  line-height: 1.5;
+  font-weight: 400;
+
+  /* Flow Launcher Darker Theme Colors */
+  --window-bg: #2F2F2F;
+  --window-border: #3b3b3b;
+  --text-primary: #ffffff;
+  --text-secondary: #8f8f8f;
+  --text-muted: #8f8f8f;
+  --selection-bg: #4d4d4d;
+  --separator-color: #3b3b3b;
+
+  /* Mapped variables */
+  --page-background: var(--window-bg);
+  --window-surface: var(--window-bg);
+  --window-shadow: 0 0 10px rgba(0, 0, 0, 0.5);
+
+  --result-hover-bg: var(--selection-bg);
+  --result-border-active: transparent;
+  --result-shadow-active: none;
+
+  --scrollbar-track: transparent;
+  --scrollbar-thumb: #555;
+  --scrollbar-thumb-hover: #777;
+
+  /* Settings Window specific */
+  --settings-bg: #2F2F2F;
+  --settings-sidebar-bg: #2F2F2F;
+  --settings-content-bg: #2F2F2F;
+  --settings-item-hover: #3f3f3f;
+  --settings-item-active: #4d4d4d;
 }
 
 *,
@@ -19,19 +46,17 @@ body,
 #root {
   height: 100%;
   margin: 0;
+  padding: 0;
+  overflow: hidden;
 }
 
 body {
-  background: var(--page-background, #0c0e13);
-  font-family: var(--font-family, "Segoe UI", "Segoe UI Variable", Inter, system-ui, -apple-system, sans-serif);
-  /* 再整体缩小一点字体，让窗口更接近 Flow Launcher 呈现 */
-  font-size: clamp(13px, calc(var(--font-size-base, 15px) * 0.9), var(--font-size-base, 15px));
-  line-height: var(--line-height-base, 1.5);
-  font-weight: var(--font-weight-base, 400);
-  color: var(--text-primary, #f4f6ff);
-  text-rendering: optimizeLegibility;
+  background: transparent;
+  /* Let the window component handle background */
+  font-family: var(--font-family);
+  font-size: var(--font-size);
+  color: var(--text-primary);
   -webkit-font-smoothing: antialiased;
-  overflow: hidden;
 }
 
 #root {
@@ -45,20 +70,20 @@ input {
 }
 
 .flow-window {
-  /* 主窗口本身尽量只包住内容区域（与 Tauri 窗口 720x480 尺寸匹配） */
-  /* 主窗口本身尽量只包住内容区域（与 Tauri 窗口 720x480 尺寸匹配） */
   width: 100%;
   height: 100%;
   margin: 0;
-  padding: 8px 10px 10px;
-  border-radius: 14px;
-  background: var(--window-surface);
+  padding: 0;
+  border-radius: 6px;
+  /* Flow Launcher uses smaller radius */
+  background: var(--window-bg);
   box-shadow: var(--window-shadow);
   position: relative;
   display: flex;
   flex-direction: column;
-  gap: 16px;
-  border: none;
+  gap: 0;
+  /* No gap between search and results */
+  border: 1px solid var(--window-border);
   color: var(--text-primary);
 }
 
@@ -90,14 +115,15 @@ input {
 .search-shell {
   display: flex;
   align-items: center;
-  gap: 14px;
-  padding: 8px 16px;
-  /* 移除边框和背景，融入主窗口 */
+  gap: 10px;
+  padding: 14px;
+  /* Match Flow Launcher padding */
+  margin: 0;
   border: none;
   background: transparent;
   box-shadow: none;
-  transition: none;
-  -webkit-app-region: no-drag;
+  -webkit-app-region: drag;
+  /* Allow dragging from search area */
 }
 
 .search-shell:focus-within {
@@ -107,13 +133,22 @@ input {
 
 .search-bar {
   flex: 1;
-  /* 搜索框字体再缩小一档 */
-  font-size: clamp(15px, 2.4vw, 20px);
-  color: inherit;
+  font-size: 22px;
+  /* Larger font for search */
+  font-weight: 400;
+  color: var(--text-primary);
   background: transparent;
   border: none;
   outline: none;
-  caret-color: #8dc0ff;
+  caret-color: var(--text-primary);
+}
+
+.search-icon {
+  color: var(--text-primary);
+  opacity: 0.5;
+  /* Slightly dimmed like Flow Launcher */
+  margin-right: 8px;
+  flex-shrink: 0;
 }
 
 .search-bar::placeholder {
@@ -124,7 +159,14 @@ input {
 
 .mode-prefix-hint {
   font-size: 12px;
-  color: var(--text-muted, rgba(255, 255, 255, 0.65));
+  font-weight: 600;
+  color: var(--text-primary);
+  background: rgba(255, 255, 255, 0.1);
+  padding: 4px 10px;
+  border-radius: 6px;
+  margin-right: 16px;
+  white-space: nowrap;
+  flex-shrink: 0;
 }
 
 .content-area {
@@ -137,19 +179,26 @@ input {
 }
 
 .results-panel {
-  /* 移除边框和背景，融入主窗口 */
-  border-radius: 0;
-  border: none;
+  /* Separator implemented via pseudo-element to match Flow Launcher margins */
+  position: relative;
   background: transparent;
-  box-shadow: none;
-  padding: 0 16px 16px;
-  /* 调整 padding */
+  padding: 0;
+  /* Padding handled by list/separator */
   display: flex;
   flex-direction: column;
-  gap: 12px;
-  position: relative;
+  gap: 0;
   flex: 1;
   min-height: 0;
+}
+
+.results-panel::before {
+  content: "";
+  display: block;
+  height: 1px;
+  background: var(--separator-color);
+  margin: 0 10px 8px 10px;
+  /* Match Flow Launcher Margin="8 0 8 8" approx (adjusted for visual balance) */
+  opacity: 0.6;
 }
 
 .content-area,
@@ -200,15 +249,22 @@ input {
   background: var(--scrollbar-thumb-hover);
 }
 
+/* Hide scrollbar track to look cleaner */
+.result-list::-webkit-scrollbar-track {
+  background: transparent;
+}
+
 .result-item {
   list-style: none;
   margin: 0;
   padding: 0;
-  border-radius: 12px;
-  /* 保留圆角但不要强制裁剪内容，避免文本被“切片” */
-  overflow: visible;
-  border: 1px solid transparent;
-  background: rgba(255, 255, 255, 0.015);
+  border-radius: 0;
+  /* Flow Launcher items are not rounded */
+  background: transparent;
+}
+
+.result-item.active {
+  background: var(--selection-bg);
 }
 
 .result-item.active {
@@ -218,15 +274,16 @@ input {
 
 .result-button {
   width: 100%;
-  background: rgba(255, 255, 255, 0.01);
+  background: transparent;
   border: none;
   display: flex;
   align-items: center;
-  gap: 10px;
-  padding: 8px 14px;
-  /* 增加上下内边距，让整条结果高度更充足 */
+  gap: 12px;
+  padding: 0 14px;
+  height: 50px;
+  /* Fixed height */
   color: inherit;
-  cursor: pointer;
+  cursor: default;
   text-align: left;
 }
 
@@ -266,23 +323,21 @@ input {
 }
 
 .result-title {
-  font-size: 13px;
-  font-weight: 600;
+  font-size: 16px;
+  font-weight: 400;
+  color: var(--text-primary);
   flex: 1;
   min-width: 0;
 }
 
 .result-tag {
-  font-size: 9px;
-  padding: 2px 8px;
-  border-radius: 999px;
-  background: var(--result-tag-bg);
-  color: rgba(255, 255, 255, 0.75);
+  display: none;
+  /* Flow Launcher doesn't show tags by default in this theme */
 }
 
 .result-subtitle {
-  font-size: 10px;
-  color: var(--subtitle-color);
+  font-size: 12px;
+  color: var(--text-secondary);
   white-space: nowrap;
   text-overflow: ellipsis;
   overflow: hidden;
@@ -432,9 +487,11 @@ input {
 }
 
 .settings-nav__item.active {
-  border-color: rgba(109, 143, 255, 0.65);
-  background: rgba(109, 143, 255, 0.15);
-  box-shadow: 0 10px 24px rgba(80, 118, 255, 0.25);
+  background: var(--selection-bg);
+  /* Use theme selection color */
+  border-color: transparent;
+  box-shadow: none;
+  color: var(--text-primary);
 }
 
 .settings-nav__icon {

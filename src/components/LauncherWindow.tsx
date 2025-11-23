@@ -9,7 +9,7 @@ import { getCurrentWindow } from "@tauri-apps/api/window";
 import { WebviewWindow } from "@tauri-apps/api/webviewWindow";
 import { listen } from "@tauri-apps/api/event";
 import type { UnlistenFn } from "@tauri-apps/api/event";
-import { LogicalSize } from "@tauri-apps/api/dpi";
+import { LogicalSize, LogicalPosition } from "@tauri-apps/api/dpi";
 
 import { SearchBar } from "./SearchBar";
 import { ResultList } from "./ResultList";
@@ -524,9 +524,64 @@ export const LauncherWindow = () => {
     : "flow-window";
 
   useEffect(() => {
-    const targetHeight = isIdle ? 60 : 460;
-    void currentWindow.setSize(new LogicalSize(700, targetHeight));
-  }, [isIdle, currentWindow]);
+    // 基础高度：搜索框 (48px) + 上下 Margin (7px * 2) = 62px
+    const BASE_HEIGHT = 62;
+    // 单个结果高度 (52px)
+    const ITEM_HEIGHT = 52;
+    // 结果列表 padding (0px)
+    const LIST_PADDING = 0;
+    // 最大高度
+    const MAX_HEIGHT = 460;
+
+    let targetHeight = BASE_HEIGHT;
+
+    if (!isIdle) {
+      if (resultsCount > 0) {
+        const contentHeight =
+          resultsCount * ITEM_HEIGHT + LIST_PADDING;
+        targetHeight = Math.min(MAX_HEIGHT, BASE_HEIGHT + contentHeight);
+      } else {
+        // 无结果或搜索中，显示提示的高度 (约 50px)
+        targetHeight = BASE_HEIGHT + 50;
+      }
+    }
+
+    const resizeWindow = async () => {
+      try {
+        // 强制宽度为 700
+        const WINDOW_WIDTH = 700;
+        const newSize = new LogicalSize(WINDOW_WIDTH, targetHeight);
+        await currentWindow.setSize(newSize);
+
+        // Calculate position: Center horizontally, 25% from top vertically
+        const monitor = await currentWindow.currentMonitor();
+        if (monitor) {
+          const screenWidth = monitor.size.width;
+          const screenHeight = monitor.size.height;
+          const scaleFactor = monitor.scaleFactor;
+
+          // Convert physical pixels to logical pixels for calculation if needed, 
+          // but setPosition usually takes LogicalPosition or PhysicalPosition.
+          // Let's stick to Physical for calculation to be safe with monitor size, then convert if needed.
+          // Actually, Tauri's setPosition handles LogicalPosition well.
+
+          const logicalScreenWidth = screenWidth / scaleFactor;
+          const logicalScreenHeight = screenHeight / scaleFactor;
+
+          const x = (logicalScreenWidth - WINDOW_WIDTH) / 2;
+          const y = logicalScreenHeight * 0.25; // Top 25%
+
+          await currentWindow.setPosition(new LogicalPosition(x, y));
+        }
+
+        console.log(`Resized window to height: ${targetHeight}`);
+      } catch (error) {
+        console.error("Failed to resize window:", error);
+      }
+    };
+
+    void resizeWindow();
+  }, [isIdle, resultsCount, currentWindow]);
 
   return (
     <div className={windowClassName} data-tauri-drag-region>
@@ -548,12 +603,14 @@ export const LauncherWindow = () => {
             applyInputValue(event.currentTarget.value);
           }}
           onKeyDown={handleKeyDown}
+          rightContent={
+            state.isModePrefixOnly ? (
+              <div className="mode-prefix-hint">
+                {state.activeMode.label}
+              </div>
+            ) : null
+          }
         />
-        {state.isModePrefixOnly ? (
-          <div className="mode-prefix-hint">
-            已切换至 {state.activeMode.label}，请输入关键词开始搜索
-          </div>
-        ) : null}
       </section>
       {isIdle ? null : (
         <section className="content-area content-area--single">
