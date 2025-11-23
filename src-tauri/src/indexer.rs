@@ -22,7 +22,7 @@ use crate::{
 };
 
 /// Build the application index by scanning Start Menu shortcuts, installed Win32 software and UWP apps.
-pub async fn build_index() -> Vec<ApplicationInfo> {
+pub async fn build_index(exclusion_paths: Vec<String>) -> Vec<ApplicationInfo> {
     let mut results = Vec::new();
 
     let start_menu = match async_runtime::spawn_blocking(enumerate_start_menu_programs).await {
@@ -68,7 +68,27 @@ pub async fn build_index() -> Vec<ApplicationInfo> {
         seen.insert((app.app_type.clone(), key_path, argument_key))
     });
     results.sort_by(|a, b| a.name.to_lowercase().cmp(&b.name.to_lowercase()));
+    
+    // Filter out system tools based on path
+    results.retain(|app| !is_system_tool(app, &exclusion_paths));
+    
     results
+}
+
+/// Check if an application is a Windows system tool based on its path
+fn is_system_tool(app: &ApplicationInfo, exclusion_paths: &[String]) -> bool {
+    let path_to_check = app.source_path.as_ref().unwrap_or(&app.path);
+    let path_lower = path_to_check.to_ascii_lowercase();
+    
+    // Check if the app is in any excluded directory
+    for sys_path in exclusion_paths {
+        let sys_path_lower = sys_path.to_ascii_lowercase();
+        if path_lower.starts_with(&sys_path_lower) {
+            return true;
+        }
+    }
+    
+    false
 }
 const UNINSTALL_SUBKEYS: &[&str] = &[
     r"SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall",

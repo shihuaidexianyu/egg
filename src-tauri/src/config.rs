@@ -31,6 +31,19 @@ pub struct AppConfig {
     pub debug_mode: bool,
     #[serde(default = "default_window_opacity")]
     pub window_opacity: f32,
+    #[serde(default = "default_system_tool_exclusions")]
+    pub system_tool_exclusions: Vec<String>,
+}
+
+fn default_system_tool_exclusions() -> Vec<String> {
+    vec![
+        r"c:\windows\system32".to_string(),
+        r"c:\windows\syswow64".to_string(),
+        r"c:\windows\winsxs".to_string(),
+        r"c:\windows\immersivecontrolpanel".to_string(),
+        r"c:\program files\windows".to_string(),
+        r"c:\program files (x86)\windows".to_string(),
+    ]
 }
 
 impl Default for AppConfig {
@@ -48,6 +61,7 @@ impl Default for AppConfig {
             force_english_input: default_force_english_input(),
             debug_mode: default_debug_mode(),
             window_opacity: default_window_opacity(),
+            system_tool_exclusions: default_system_tool_exclusions(),
         }
     }
 }

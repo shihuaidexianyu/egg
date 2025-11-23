@@ -21,6 +21,7 @@ export type AppSettings = {
   force_english_input: boolean;
   debug_mode: boolean;
   window_opacity: number;
+  system_tool_exclusions: string[];
 };
 
 export type ModeId = "all" | "bookmark" | "app" | "search";

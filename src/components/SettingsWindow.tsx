@@ -140,6 +140,36 @@ export const SettingsWindow = () => {
               <div className="settings-card">
                 <div className="settings-card__header">
                   <div>
+                    <h3 className="settings-card__title">系统工具过滤</h3>
+                    <p className="settings-card__subtitle">
+                      设置需要过滤的系统路径（每行一个）
+                    </p>
+                  </div>
+                </div>
+                <div className="settings-input-row">
+                  <label>排除路径列表</label>
+                  <textarea
+                    className="settings-textarea"
+                    rows={8}
+                    value={(settings?.system_tool_exclusions || []).join('\n')}
+                    onChange={(e) => {
+                      const paths = e.target.value
+                        .split('\n')
+                        .map(p => p.trim())
+                        .filter(p => p.length > 0);
+                      updateSetting('system_tool_exclusions', paths);
+                    }}
+                    placeholder="c:\windows\system32&#10;c:\windows\syswow64"
+                  />
+                  <p className="settings-hint">
+                    添加需要过滤的目录路径，每行一个。应用会自动过滤这些目录下的程序。
+                  </p>
+                </div>
+              </div>
+
+              <div className="settings-card">
+                <div className="settings-card__header">
+                  <div>
                     <h3 className="settings-card__title">调试</h3>
                   </div>
                 </div>

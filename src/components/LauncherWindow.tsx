@@ -540,32 +540,36 @@ export const LauncherWindow = () => {
     const resizeWindow = async () => {
       try {
         const WINDOW_WIDTH = 800;
-        const newSize = new LogicalSize(WINDOW_WIDTH, targetHeight);
-        await currentWindow.setSize(newSize);
 
-        const monitor = await currentWindow.currentMonitor();
-        if (monitor) {
-          const screenWidth = monitor.size.width;
-          const screenHeight = monitor.size.height;
-          const scaleFactor = monitor.scaleFactor;
+        // Use requestAnimationFrame to batch resize with browser paint cycle
+        requestAnimationFrame(async () => {
+          const newSize = new LogicalSize(WINDOW_WIDTH, targetHeight);
+          await currentWindow.setSize(newSize);
 
-          const logicalScreenWidth = screenWidth / scaleFactor;
-          const logicalScreenHeight = screenHeight / scaleFactor;
+          const monitor = await currentWindow.currentMonitor();
+          if (monitor) {
+            const screenWidth = monitor.size.width;
+            const screenHeight = monitor.size.height;
+            const scaleFactor = monitor.scaleFactor;
 
-          const x = (logicalScreenWidth - WINDOW_WIDTH) / 2;
-          const y = logicalScreenHeight * 0.25;
+            const logicalScreenWidth = screenWidth / scaleFactor;
+            const logicalScreenHeight = screenHeight / scaleFactor;
 
-          await currentWindow.setPosition(new LogicalPosition(x, y));
-        }
+            const x = (logicalScreenWidth - WINDOW_WIDTH) / 2;
+            const y = logicalScreenHeight * 0.25;
 
-        console.log(`Resized to ${WINDOW_WIDTH}x${targetHeight}, ${resultsCount} results`);
+            await currentWindow.setPosition(new LogicalPosition(x, y));
+          }
+
+          console.log(`Resized to ${WINDOW_WIDTH}x${targetHeight}, ${resultsCount} results`);
+        });
       } catch (error) {
         console.error("Failed to resize window:", error);
       }
     };
 
     void resizeWindow();
-  }, [isIdle, resultsCount, currentWindow]);
+  }, [isIdle, resultsCount, currentWindow, hasMatches]);
 
   return (
     <div className={windowClassName} data-tauri-drag-region>

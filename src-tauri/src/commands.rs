@@ -64,6 +64,7 @@ pub struct SettingsUpdatePayload {
     pub force_english_input: Option<bool>,
     pub debug_mode: Option<bool>,
     pub window_opacity: Option<f32>,
+    pub system_tool_exclusions: Option<Vec<String>>,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -299,9 +300,15 @@ pub async fn execute_action(
 pub async fn trigger_reindex(state: State<'_, AppState>) -> Result<(), String> {
     let app_index = Arc::clone(&state.app_index);
     let bookmark_index = Arc::clone(&state.bookmark_index);
+    let config_arc = Arc::clone(&state.config);
 
     tauri::async_runtime::spawn(async move {
-        let apps = indexer::build_index().await;
+        let exclusion_paths = {
+            let config = config_arc.lock().unwrap();
+            config.system_tool_exclusions.clone()
+        };
+        
+        let apps = indexer::build_index(exclusion_paths).await;
         if let Ok(mut guard) = app_index.lock() {
             *guard = apps;
         }
@@ -400,6 +407,10 @@ pub fn update_settings(
             .ok_or_else(|| "搜索模式前缀需为单个字母，可选跟随空格或冒号".to_string())?;
     }
 
+    if let Some(paths) = updates.system_tool_exclusions {
+        guard.system_tool_exclusions = paths;
+    }
+
     guard.save(&app_handle)?;
     let snapshot = guard.clone();
     let _ = app_handle.emit(SETTINGS_UPDATED_EVENT, snapshot.clone());
@@ -434,6 +445,7 @@ pub fn update_hotkey(
             force_english_input: None,
             debug_mode: None,
             window_opacity: None,
+            system_tool_exclusions: None,
         },
         app_handle,
         state,

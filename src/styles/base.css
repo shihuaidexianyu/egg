@@ -89,6 +89,8 @@ input {
   color: var(--text-primary);
   overflow: hidden;
   /* Prevent window-level scrolling */
+  transition: none;
+  /* Disable transitions on window to prevent jitter */
 }
 
 .flow-window--compact {
@@ -247,6 +249,8 @@ input {
   overflow-y: auto;
   scrollbar-width: thin;
   scrollbar-color: var(--scrollbar-thumb) rgba(255, 255, 255, 0.05);
+  opacity: 1;
+  transform: translateY(0);
 }
 
 .results-panel::-webkit-scrollbar {
@@ -796,6 +800,23 @@ input {
   background: rgba(255, 255, 255, 0.04);
   color: var(--text-muted);
   font-size: 13px;
+}
+
+.settings-textarea {
+  width: 100%;
+  padding: 8px;
+  background: rgba(255, 255, 255, 0.05);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 4px;
+  color: var(--text-primary);
+  font-size: 14px;
+  font-family: 'Consolas', 'Courier New', monospace;
+  resize: vertical;
+}
+
+.settings-textarea:focus {
+  outline: none;
+  border-color: rgba(255, 255, 255, 0.3);
 }
 
 .settings-window__footer {
