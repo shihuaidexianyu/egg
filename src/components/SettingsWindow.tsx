@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import type { UnlistenFn } from "@tauri-apps/api/event";
@@ -6,17 +6,13 @@ import {
   SETTINGS_UPDATED_EVENT,
   WINDOW_OPACITY_PREVIEW_EVENT,
 } from "../constants/events";
-import {
-  buildModeConfigsFromSettings,
-  buildPrefixToMode,
-} from "../constants/modes";
 import type { AppSettings } from "../types";
 import { applyWindowOpacityVariable } from "../utils/theme";
 
 const TABS = [
   { id: "general", label: "常规", icon: "⚙️", desc: "通用行为设置" },
-  { id: "search", label: "搜索", icon: "🔍", desc: "搜索引擎与模式" },
-  { id: "appearance", label: "外观", icon: "🎨", desc: "主题与样式" },
+  { id: "search", label: "搜索", icon: "🔍", desc: "搜索模式前缀" },
+  { id: "appearance", label: "外观", icon: "🎨", desc: "窗口透明度" },
   { id: "about", label: "关于", icon: "ℹ️", desc: "版本信息" },
 ] as const;
 
@@ -95,26 +91,13 @@ export const SettingsWindow = () => {
     [updateSetting],
   );
 
-  const modeConfigs = useMemo(
-    () => buildModeConfigsFromSettings(settings),
-    [settings],
-  );
-
   const handlePrefixChange = useCallback(
-    (modeId: string, newPrefix: string) => {
+    (key: keyof AppSettings, newPrefix: string) => {
       if (!settings) {
         return;
       }
       const trimmed = newPrefix.trim();
-      let key: keyof AppSettings | undefined;
-      if (modeId === "app") key = "app_mode_prefix";
-      if (modeId === "bookmark") key = "bookmark_mode_prefix";
-      if (modeId === "url") key = "url_mode_prefix";
-      if (modeId === "history") key = "history_mode_prefix";
-
-      if (key) {
-        void updateSetting(key, trimmed);
-      }
+      void updateSetting(key, trimmed);
     },
     [settings, updateSetting],
   );
@@ -154,58 +137,6 @@ export const SettingsWindow = () => {
         <main className="settings-panel">
           {activeTab === "general" && (
             <div className="settings-section">
-              <div className="settings-card">
-                <div className="settings-card__header">
-                  <div>
-                    <h3 className="settings-card__title">启动与行为</h3>
-                    <p className="settings-card__subtitle">
-                      控制应用如何启动和响应
-                    </p>
-                  </div>
-                </div>
-                <div className="settings-toggle-group">
-                  <label
-                    className={`settings-toggle ${settings?.launch_at_login ? "on" : ""}`}
-                  >
-                    <input
-                      type="checkbox"
-                      checked={settings?.launch_at_login ?? false}
-                      onChange={(e) =>
-                        updateSetting("launch_at_login", e.target.checked)
-                      }
-                      hidden
-                    />
-                    <div className="toggle-pill" />
-                    <div>
-                      <div className="toggle-title">开机自启</div>
-                      <div className="toggle-subtitle">
-                        登录系统时自动启动 egg
-                      </div>
-                    </div>
-                  </label>
-
-                  <label
-                    className={`settings-toggle ${settings?.hide_on_blur ? "on" : ""}`}
-                  >
-                    <input
-                      type="checkbox"
-                      checked={settings?.hide_on_blur ?? true}
-                      onChange={(e) =>
-                        updateSetting("hide_on_blur", e.target.checked)
-                      }
-                      hidden
-                    />
-                    <div className="toggle-pill" />
-                    <div>
-                      <div className="toggle-title">失去焦点时隐藏</div>
-                      <div className="toggle-subtitle">
-                        点击窗口外部时自动隐藏搜索框
-                      </div>
-                    </div>
-                  </label>
-                </div>
-              </div>
-
               <div className="settings-card">
                 <div className="settings-card__header">
                   <div>
@@ -249,31 +180,25 @@ export const SettingsWindow = () => {
                 <div className="settings-prefix-grid">
                   {[
                     {
-                      id: "app",
+                      key: "prefix_app" as keyof AppSettings,
                       label: "应用搜索",
-                      value: settings?.app_mode_prefix,
-                      default: "app",
+                      value: settings?.prefix_app,
+                      default: "r",
                     },
                     {
-                      id: "bookmark",
+                      key: "prefix_bookmark" as keyof AppSettings,
                       label: "书签搜索",
-                      value: settings?.bookmark_mode_prefix,
-                      default: "bm",
+                      value: settings?.prefix_bookmark,
+                      default: "b",
                     },
                     {
-                      id: "url",
-                      label: "网址直达",
-                      value: settings?.url_mode_prefix,
-                      default: "url",
-                    },
-                    {
-                      id: "history",
-                      label: "历史记录",
-                      value: settings?.history_mode_prefix,
-                      default: "his",
+                      key: "prefix_search" as keyof AppSettings,
+                      label: "网页搜索",
+                      value: settings?.prefix_search,
+                      default: "s",
                     },
                   ].map((item) => (
-                    <div key={item.id} className="settings-prefix-row">
+                    <div key={item.key} className="settings-prefix-row">
                       <span className="settings-prefix-label">
                         {item.label}
                       </span>
@@ -282,7 +207,7 @@ export const SettingsWindow = () => {
                         className="settings-input settings-input--small"
                         value={item.value ?? item.default}
                         onChange={(e) =>
-                          handlePrefixChange(item.id, e.target.value)
+                          handlePrefixChange(item.key, e.target.value)
                         }
                       />
                       <span className="settings-hint">

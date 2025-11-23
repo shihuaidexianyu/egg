@@ -589,7 +589,10 @@ export const LauncherWindow = () => {
           onKeyDown={handleKeyDown}
           rightContent={
             hasQuery && !state.isComposing ? (
-              <div className={`search-status-indicator ${hasMatches ? 'success' : 'error'}`}></div>
+              <div className="search-status-area">
+                <span className="search-mode-label">{state.activeMode.label}</span>
+                <div className={`search-status-indicator ${hasMatches ? 'success' : 'error'}`}></div>
+              </div>
             ) : null
           }
         />
