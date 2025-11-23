@@ -9,6 +9,7 @@ import { getCurrentWindow } from "@tauri-apps/api/window";
 import { WebviewWindow } from "@tauri-apps/api/webviewWindow";
 import { listen } from "@tauri-apps/api/event";
 import type { UnlistenFn } from "@tauri-apps/api/event";
+import { LogicalSize } from "@tauri-apps/api/dpi";
 
 import { SearchBar } from "./SearchBar";
 import { ResultList } from "./ResultList";
@@ -521,6 +522,11 @@ export const LauncherWindow = () => {
   const windowClassName = isIdle
     ? "flow-window flow-window--compact"
     : "flow-window";
+
+  useEffect(() => {
+    const targetHeight = isIdle ? 60 : 460;
+    void currentWindow.setSize(new LogicalSize(700, targetHeight));
+  }, [isIdle, currentWindow]);
 
   return (
     <div className={windowClassName} data-tauri-drag-region>

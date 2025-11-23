@@ -17,7 +17,7 @@
         "width": 1000,
         "height": 480,
         "minWidth": 640,
-        "minHeight": 420,
+        "minHeight": 60,
         "resizable": true,
         "visible": false,
         "alwaysOnTop": true,
