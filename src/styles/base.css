@@ -71,7 +71,9 @@ input {
 
 .flow-window {
   width: 100%;
-  height: 100%;
+  height: 100vh;
+  /* Use viewport height to ensure proper sizing */
+  max-height: 100%;
   margin: 0;
   padding: 0;
   border-radius: 6px;
@@ -85,6 +87,8 @@ input {
   /* No gap between search and results */
   border: 1px solid var(--window-border);
   color: var(--text-primary);
+  overflow: hidden;
+  /* Prevent window-level scrolling */
 }
 
 .flow-window--compact {
@@ -172,34 +176,54 @@ input {
 .content-area {
   display: flex;
   flex-direction: column;
-  gap: 18px;
+  gap: 0;
   flex: 1;
-  /* 只由内部 results-panel 控制滚动，避免吞掉子元素滚轮事件 */
-  overflow: visible;
+  min-height: 0;
+  overflow: hidden;
+  /* Contain overflow to enable scrolling in child */
 }
 
+
 .results-panel {
-  /* Separator implemented via pseudo-element to match Flow Launcher margins */
   position: relative;
   background: transparent;
   padding: 0;
-  /* Padding handled by list/separator */
   display: flex;
   flex-direction: column;
   gap: 0;
   flex: 1;
   min-height: 0;
+  overflow-y: auto;
+  scrollbar-width: thin;
+  scrollbar-color: var(--scrollbar-thumb) rgba(255, 255, 255, 0.05);
 }
 
-.results-panel::before {
-  content: "";
-  display: block;
+.results-panel::-webkit-scrollbar {
+  width: 8px;
+}
+
+.results-panel::-webkit-scrollbar-track {
+  background: rgba(255, 255, 255, 0.05);
+  border-radius: 4px;
+}
+
+.results-panel::-webkit-scrollbar-thumb {
+  background: var(--scrollbar-thumb);
+  border-radius: 4px;
+}
+
+.results-panel::-webkit-scrollbar-thumb:hover {
+  background: var(--scrollbar-thumb-hover);
+}
+
+.results-separator {
   height: 1px;
   background: var(--separator-color);
   margin: 0 10px 8px 10px;
-  /* Match Flow Launcher Margin="8 0 8 8" approx (adjusted for visual balance) */
   opacity: 0.6;
+  flex-shrink: 0;
 }
+
 
 .content-area,
 .results-panel,
@@ -215,44 +239,14 @@ input {
 .result-list {
   list-style: none;
   margin: 0;
-  padding: 0;
+  padding: 0 12px 8px 0;
+  /* Right/bottom padding */
   display: flex;
   flex-direction: column;
-  gap: 10px;
-  /* 条目之间留更多空隙，避免视觉挤压 */
-  /* 使用浏览器默认策略，允许滚轮滚动但不强制显示轨道 */
-  overflow-y: auto;
-  flex: 1;
-  min-height: 0;
-  padding-right: 12px;
-  scrollbar-width: thin;
-  scrollbar-color: var(--scrollbar-thumb) var(--scrollbar-track);
-  overscroll-behavior: contain;
-  scrollbar-gutter: stable both-edges;
+  gap: 0;
 }
 
-.result-list::-webkit-scrollbar {
-  width: 10px;
-}
 
-.result-list::-webkit-scrollbar-track {
-  background: var(--scrollbar-track);
-  border-radius: 999px;
-}
-
-.result-list::-webkit-scrollbar-thumb {
-  background: var(--scrollbar-thumb);
-  border-radius: 999px;
-}
-
-.result-list::-webkit-scrollbar-thumb:hover {
-  background: var(--scrollbar-thumb-hover);
-}
-
-/* Hide scrollbar track to look cleaner */
-.result-list::-webkit-scrollbar-track {
-  background: transparent;
-}
 
 .result-item {
   list-style: none;
