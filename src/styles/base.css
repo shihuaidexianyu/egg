@@ -173,6 +173,43 @@ input {
   flex-shrink: 0;
 }
 
+.search-status-indicator {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  margin-right: 16px;
+  flex-shrink: 0;
+  animation: breathe 2s ease-in-out infinite;
+}
+
+.search-status-indicator.success {
+  background: #4ade80;
+  /* Green */
+  box-shadow: 0 0 8px rgba(74, 222, 128, 0.6);
+}
+
+.search-status-indicator.error {
+  background: #f87171;
+  /* Red */
+  box-shadow: 0 0 8px rgba(248, 113, 113, 0.6);
+  animation: none;
+  /* No breathing for error state */
+}
+
+@keyframes breathe {
+
+  0%,
+  100% {
+    opacity: 1;
+    transform: scale(1);
+  }
+
+  50% {
+    opacity: 0.6;
+    transform: scale(0.95);
+  }
+}
+
 .content-area {
   display: flex;
   flex-direction: column;

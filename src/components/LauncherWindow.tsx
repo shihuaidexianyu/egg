@@ -531,13 +531,10 @@ export const LauncherWindow = () => {
 
     let targetHeight = BASE_HEIGHT;
 
-    if (!isIdle) {
-      if (resultsCount > 0) {
-        const contentHeight = resultsCount * ITEM_HEIGHT + LIST_PADDING;
-        targetHeight = Math.min(MAX_HEIGHT, BASE_HEIGHT + contentHeight);
-      } else {
-        targetHeight = BASE_HEIGHT + 50;
-      }
+    // Only expand if there are actual results
+    if (!isIdle && hasMatches && resultsCount > 0) {
+      const contentHeight = resultsCount * ITEM_HEIGHT + LIST_PADDING;
+      targetHeight = Math.min(MAX_HEIGHT, BASE_HEIGHT + contentHeight);
     }
 
     const resizeWindow = async () => {
@@ -591,38 +588,26 @@ export const LauncherWindow = () => {
           }}
           onKeyDown={handleKeyDown}
           rightContent={
-            state.isModePrefixOnly ? (
-              <div className="mode-prefix-hint">
-                {state.activeMode.label}
-              </div>
+            hasQuery && !state.isComposing ? (
+              <div className={`search-status-indicator ${hasMatches ? 'success' : 'error'}`}></div>
             ) : null
           }
         />
       </section>
-      {isIdle ? null : (
+      {!isIdle && hasMatches ? (
         <section className="content-area content-area--single">
           <div className="results-panel">
             <div className="results-separator"></div>
-            {hasMatches ? (
-              <ResultList
-                results={state.results}
-                selectedIndex={state.selectedIndex}
-                onSelect={handleResultSelect}
-                onActivate={handleResultActivate}
-                resolveResultTag={resolveResultTag}
-              />
-            ) : (
-              <div className="empty-hint">
-                {hasQuery
-                  ? state.activeMode.id === "all"
-                    ? "没有匹配的结果"
-                    : `当前 ${state.activeMode.label} 中没有找到匹配项`
-                  : "输入任意关键词开始搜索"}
-              </div>
-            )}
+            <ResultList
+              results={state.results}
+              selectedIndex={state.selectedIndex}
+              onSelect={handleResultSelect}
+              onActivate={handleResultActivate}
+              resolveResultTag={resolveResultTag}
+            />
           </div>
         </section>
-      )}
+      ) : null}
       {state.toastMessage ? <Toast message={state.toastMessage} /> : null}
     </div>
   );
