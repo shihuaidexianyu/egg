@@ -46,9 +46,10 @@ input {
 
 .flow-window {
   /* 主窗口本身尽量只包住内容区域（与 Tauri 窗口 720x480 尺寸匹配） */
-  width: min(700px, calc(100vw - 16px));
-  height: min(460px, calc(100vh - 24px));
-  margin: 8px auto;
+  /* 主窗口本身尽量只包住内容区域（与 Tauri 窗口 720x480 尺寸匹配） */
+  width: 100%;
+  height: 100%;
+  margin: 0;
   padding: 8px 10px 10px;
   border-radius: 14px;
   background: var(--window-surface);
@@ -73,7 +74,7 @@ input {
   /* 外圈高光边框与窗口大小更贴近 */
   border-radius: 14px;
   pointer-events: none;
-  box-shadow: var(--window-border);
+  /* box-shadow: var(--window-border); */
 }
 
 .search-area {
@@ -141,7 +142,8 @@ input {
   border: none;
   background: transparent;
   box-shadow: none;
-  padding: 0 16px 16px; /* 调整 padding */
+  padding: 0 16px 16px;
+  /* 调整 padding */
   display: flex;
   flex-direction: column;
   gap: 12px;
