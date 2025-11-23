@@ -5,7 +5,7 @@ import type {
   KeyboardEvent as InputKeyboardEvent,
 } from "react";
 import { invoke } from "@tauri-apps/api/core";
-import { getCurrentWindow } from "@tauri-apps/api/window";
+import { getCurrentWindow, currentMonitor } from "@tauri-apps/api/window";
 import { WebviewWindow } from "@tauri-apps/api/webviewWindow";
 import { listen } from "@tauri-apps/api/event";
 import type { UnlistenFn } from "@tauri-apps/api/event";
@@ -546,7 +546,7 @@ export const LauncherWindow = () => {
           const newSize = new LogicalSize(WINDOW_WIDTH, targetHeight);
           await currentWindow.setSize(newSize);
 
-          const monitor = await currentWindow.currentMonitor();
+          const monitor = await currentMonitor();
           if (monitor) {
             const screenWidth = monitor.size.width;
             const screenHeight = monitor.size.height;
