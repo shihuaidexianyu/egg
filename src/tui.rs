@@ -687,8 +687,9 @@ fn render_results(frame: &mut Frame, area: Rect, ui_state: &mut TuiState, theme:
                 result.title.clone(),
                 Style::default().fg(theme.text).add_modifier(Modifier::BOLD),
             ));
+            let type_label = result_type_label(&result.action_id);
             let subtitle = Line::from(Span::styled(
-                result.subtitle.clone(),
+                type_label,
                 Style::default().fg(theme.dim),
             ));
             ListItem::new(vec![title, subtitle])
@@ -705,6 +706,17 @@ fn render_results(frame: &mut Frame, area: Rect, ui_state: &mut TuiState, theme:
         )
         .highlight_symbol("> ");
     frame.render_stateful_widget(list, area, &mut ui_state.list_state);
+}
+
+fn result_type_label(action_id: &str) -> &'static str {
+    match action_id {
+        "app" => "Application",
+        "uwp" => "Microsoft Store Application",
+        "bookmark" => "Bookmark",
+        "url" => "Web Address",
+        "search" => "Web Search",
+        _ => "Other",
+    }
 }
 
 fn render_footer(frame: &mut Frame, area: Rect, ui_state: &TuiState, theme: Theme) {
