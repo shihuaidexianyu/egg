@@ -244,10 +244,10 @@ fn handle_key_event(key: KeyEvent, ui_state: &mut TuiState, app_state: &AppState
                     if let Some(action) = ui_state.pending_actions.get(&result.id).cloned() {
                         ui_state.pending_action = Some(action);
                         ui_state.pending_result = Some(result);
+                        ui_state.should_quit = true;
                     }
                 }
             }
-            ui_state.should_quit = true;
         }
         KeyCode::Up => move_selection(ui_state, -1),
         KeyCode::Down => move_selection(ui_state, 1),
