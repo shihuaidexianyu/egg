@@ -687,10 +687,10 @@ fn render_results(frame: &mut Frame, area: Rect, ui_state: &mut TuiState, theme:
                 result.title.clone(),
                 Style::default().fg(theme.text).add_modifier(Modifier::BOLD),
             ));
-            let type_label = result_type_label(&result.action_id);
+            let (type_label, type_color) = result_type_info(&result.action_id, theme);
             let subtitle = Line::from(Span::styled(
                 type_label,
-                Style::default().fg(theme.dim),
+                Style::default().fg(type_color),
             ));
             ListItem::new(vec![title, subtitle])
         })
@@ -708,14 +708,14 @@ fn render_results(frame: &mut Frame, area: Rect, ui_state: &mut TuiState, theme:
     frame.render_stateful_widget(list, area, &mut ui_state.list_state);
 }
 
-fn result_type_label(action_id: &str) -> &'static str {
+fn result_type_info(action_id: &str, theme: Theme) -> (&'static str, Color) {
     match action_id {
-        "app" => "Application",
-        "uwp" => "Microsoft Store Application",
-        "bookmark" => "Bookmark",
-        "url" => "Web Address",
-        "search" => "Web Search",
-        _ => "Other",
+        "app" => ("Application", theme.accent),
+        "uwp" => ("Microsoft Store Application", Color::Rgb(126, 211, 158)),
+        "bookmark" => ("Bookmark", Color::Rgb(122, 199, 242)),
+        "url" => ("Web Address", Color::Rgb(238, 185, 110)),
+        "search" => ("Web Search", Color::Rgb(190, 168, 255)),
+        _ => ("Other", theme.dim),
     }
 }
 

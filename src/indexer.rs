@@ -1,4 +1,4 @@
-use std::collections::HashSet;
+use std::{collections::HashSet, path::Path};
 
 use log::{debug, warn};
 use windows::{
@@ -66,6 +66,40 @@ fn is_system_tool(app: &ApplicationInfo, exclusion_paths: &[String]) -> bool {
 fn looks_like_file_path(path: &str) -> bool {
     let lower = path.to_ascii_lowercase();
     lower.contains(":\\") || lower.contains(":/") || lower.starts_with("\\\\")
+}
+
+fn is_openable_parsing_name(value: &str) -> bool {
+    let trimmed = value.trim();
+    if trimmed.is_empty() {
+        return false;
+    }
+
+    let lower = trimmed.to_ascii_lowercase();
+    if lower.starts_with("shell:appsfolder\\") && lower.contains('!') {
+        return true;
+    }
+
+    if looks_like_file_path(&lower) {
+        let path = Path::new(trimmed);
+        if !path.is_file() {
+            return false;
+        }
+
+        return path
+            .extension()
+            .and_then(|ext| ext.to_str())
+            .map(|ext| {
+                ext.eq_ignore_ascii_case("exe")
+                    || ext.eq_ignore_ascii_case("lnk")
+                    || ext.eq_ignore_ascii_case("url")
+                    || ext.eq_ignore_ascii_case("appref-ms")
+                    || ext.eq_ignore_ascii_case("bat")
+                    || ext.eq_ignore_ascii_case("cmd")
+            })
+            .unwrap_or(false);
+    }
+
+    false
 }
 
 struct ComInitGuard {
@@ -144,6 +178,9 @@ fn enumerate_shell_apps() -> WinResult<Vec<ApplicationInfo>> {
                 Some(value) => value,
                 None => continue,
             };
+            if !is_openable_parsing_name(&parsing_name) {
+                continue;
+            }
 
             let app_type = infer_shell_app_type(&parsing_name);
             let mut keywords = vec![name.clone(), parsing_name.clone()];
