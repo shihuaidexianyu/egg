@@ -50,6 +50,7 @@ egg-cli
 ```
 
 **Commands:**
+
 - `<query>` - Search for apps, bookmarks, or URLs
 - `!1` - Launch the first search result
 - `help` - Show available commands
@@ -58,6 +59,7 @@ egg-cli
 - `quit` - Exit egg-cli
 
 **Examples:**
+
 ```
 > chrome          # Search for Chrome
 [1] Google Chrome
@@ -78,6 +80,7 @@ Launched successfully!
 Configuration is stored in `%APPDATA%\egg-cli\settings.json`.
 
 Default configuration:
+
 ```json
 {
   "global_hotkey": "Alt+Space",
@@ -143,17 +146,20 @@ egg/
 ### Core Modules
 
 **Search Core** (`search_core.rs`):
+
 - Pure business logic for fuzzy matching
 - No platform-specific code
 - Supports apps, bookmarks, and web search
 
 **Indexer** (`indexer.rs`):
+
 - Scans Start Menu shortcuts
 - Enumerates Win32 apps from registry
 - Lists UWP applications
 - Icon extraction with caching
 
 **Executor** (`execute.rs`):
+
 - Launches Win32 applications via ShellExecute
 - Activates UWP apps via ApplicationActivationManager
 - Opens URLs in default browser
