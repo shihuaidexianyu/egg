@@ -6,7 +6,14 @@ use std::{
 
 use log::{debug, error, warn};
 use windows::{
-    core::Result as WinResult, Management::Deployment::PackageManager,
+    core::{Error as WinError, HSTRING, HRESULT, PWSTR, Result as WinResult},
+    Management::Deployment::PackageManager,
+    Win32::{
+        Foundation::{CloseHandle, HLOCAL, HANDLE, LocalFree},
+        Security::{GetTokenInformation, TokenUser, TOKEN_QUERY, TOKEN_USER},
+        Security::Authorization::ConvertSidToStringSidW,
+        System::Threading::{GetCurrentProcess, OpenProcessToken},
+    },
 };
 use winreg::{enums::*, RegKey};
 
@@ -514,11 +521,78 @@ fn looks_like_uninstaller(path: &str) -> bool {
     lower.contains("unins") || lower.contains("uninstall")
 }
 
+struct HandleGuard(HANDLE);
+
+impl Drop for HandleGuard {
+    fn drop(&mut self) {
+        if self.0.is_invalid() {
+            return;
+        }
+        unsafe {
+            let _ = CloseHandle(self.0);
+        }
+    }
+}
+
+struct LocalFreeGuard(HLOCAL);
+
+impl Drop for LocalFreeGuard {
+    fn drop(&mut self) {
+        if self.0.is_invalid() {
+            return;
+        }
+        unsafe {
+            let _ = LocalFree(self.0);
+        }
+    }
+}
+
+fn current_user_sid_hstring() -> WinResult<HSTRING> {
+    unsafe {
+        let mut token = HANDLE::default();
+        OpenProcessToken(GetCurrentProcess(), TOKEN_QUERY, &mut token)?;
+        let _token_guard = HandleGuard(token);
+
+        let mut needed = 0u32;
+        let _ = GetTokenInformation(token, TokenUser, None, 0, &mut needed);
+        if needed == 0 {
+            return Err(WinError::from_win32());
+        }
+
+        let mut buffer = vec![0u8; needed as usize];
+        GetTokenInformation(
+            token,
+            TokenUser,
+            Some(buffer.as_mut_ptr().cast()),
+            needed,
+            &mut needed,
+        )?;
+
+        let token_user = buffer.as_ptr() as *const TOKEN_USER;
+        let sid = (*token_user).User.Sid;
+        let mut sid_ptr = PWSTR::null();
+        ConvertSidToStringSidW(sid, &mut sid_ptr)?;
+        let _sid_guard = LocalFreeGuard(HLOCAL(sid_ptr.as_ptr().cast()));
+        let sid_string = sid_ptr
+            .to_string()
+            .map_err(|_| WinError::from_win32())?;
+
+        Ok(HSTRING::from(sid_string))
+    }
+}
+
 async fn enumerate_uwp_apps() -> WinResult<Vec<ApplicationInfo>> {
     let manager = PackageManager::new()?;
     let mut applications = Vec::new();
 
-    let iterable = manager.FindPackages()?;
+    let iterable = match manager.FindPackages() {
+        Ok(iterable) => iterable,
+        Err(err) if err.code() == HRESULT(0x80070005_u32 as _) => {
+            let user_sid = current_user_sid_hstring()?;
+            manager.FindPackagesByUserSecurityId(&user_sid)?
+        }
+        Err(err) => return Err(err),
+    };
     let iterator = iterable.First()?;
     while iterator.HasCurrent()? {
         let package = iterator.Current()?;
