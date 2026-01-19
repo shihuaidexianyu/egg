@@ -24,6 +24,7 @@ pub struct AppState {
     pub config: Arc<Mutex<AppConfig>>,
     pub pending_actions: Arc<Mutex<HashMap<String, PendingAction>>>,
     pub search_cache: Arc<Mutex<SearchCache>>,
+    pub recent_actions: Arc<Mutex<RecentList>>,
 }
 
 impl AppState {
@@ -34,6 +35,7 @@ impl AppState {
             config: Arc::new(Mutex::new(AppConfig::default())),
             pending_actions: Arc::new(Mutex::new(HashMap::new())),
             search_cache: Arc::new(Mutex::new(SearchCache::new(8))),
+            recent_actions: Arc::new(Mutex::new(RecentList::new(12))),
         }
     }
 }
@@ -42,6 +44,48 @@ impl AppState {
 pub struct CachedSearch {
     pub results: Vec<SearchResult>,
     pub pending_actions: HashMap<String, PendingAction>,
+}
+
+#[derive(Clone)]
+pub struct RecentEntry {
+    pub result: SearchResult,
+    pub action: PendingAction,
+}
+
+pub struct RecentList {
+    capacity: usize,
+    entries: VecDeque<RecentEntry>,
+}
+
+impl RecentList {
+    pub fn new(capacity: usize) -> Self {
+        Self {
+            capacity: capacity.max(1),
+            entries: VecDeque::new(),
+        }
+    }
+
+    pub fn insert(&mut self, entry: RecentEntry) {
+        if let Some(pos) = self
+            .entries
+            .iter()
+            .position(|item| item.result.id == entry.result.id)
+        {
+            self.entries.remove(pos);
+        }
+        self.entries.push_front(entry);
+        self.evict_if_needed();
+    }
+
+    pub fn items(&self) -> impl Iterator<Item = &RecentEntry> {
+        self.entries.iter()
+    }
+
+    fn evict_if_needed(&mut self) {
+        while self.entries.len() > self.capacity {
+            self.entries.pop_back();
+        }
+    }
 }
 
 pub struct SearchCache {
