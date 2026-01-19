@@ -61,6 +61,10 @@ pub fn search(
     if trimmed.is_empty() {
         return (Vec::new(), HashMap::new());
     }
+    let tokens = tokenize_query(trimmed);
+    if tokens.is_empty() {
+        return (Vec::new(), HashMap::new());
+    }
 
     let query_mode = QueryMode::from_option(mode);
     let include_apps = config.enable_app_results;
@@ -93,7 +97,7 @@ pub fn search(
 
     if query_mode.allows_applications() && include_apps {
         for app in app_index.iter() {
-            if let Some(score) = match_application(&matcher, app, trimmed) {
+            if let Some(score) = match_application(&matcher, app, trimmed, &tokens) {
                 counter += 1;
                 let result_id = format!("app-{}", app.id);
                 pending_actions.insert(result_id.clone(), PendingAction::Application(app.clone()));
@@ -119,7 +123,7 @@ pub fn search(
 
     if query_mode.allows_bookmarks() && include_bookmarks {
         for bookmark in bookmark_index.iter() {
-            if let Some(score) = match_bookmark(&matcher, bookmark, trimmed) {
+            if let Some(score) = match_bookmark(&matcher, bookmark, trimmed, &tokens) {
                 counter += 1;
                 let subtitle = match &bookmark.folder_path {
                     Some(path) => format!("收藏夹 · {path} · {}", bookmark.url),
@@ -170,104 +174,66 @@ fn is_url_like(input: &str) -> bool {
         || input.contains('.') && input.split_whitespace().count() == 1
 }
 
-fn match_application(matcher: &SkimMatcherV2, app: &ApplicationInfo, query: &str) -> Option<i64> {
-    let mut best = None;
-    let query_lower = query.to_ascii_lowercase();
-
-    if let Some(score) = matcher.fuzzy_match(&app.name, query) {
-        let mut weighted = 100 + score;
-        if app.name.to_ascii_lowercase().starts_with(&query_lower) {
-            weighted += 20;
-        }
-        update_best(&mut best, weighted);
-    }
-
-    if let Some(pinyin_index) = &app.pinyin_index {
-        for entry in pinyin_index.split_whitespace() {
-            let (full, initials) = split_pinyin_entry(entry);
-            if let Some(full) = full {
-                if let Some(score) = matcher.fuzzy_match(full, query) {
-                    update_best(&mut best, 70 + score);
-                }
-            }
-            if let Some(initials) = initials {
-                if let Some(score) = matcher.fuzzy_match(initials, query) {
-                    update_best(&mut best, 80 + score);
-                }
-            }
-        }
-    }
-
+fn match_application(
+    matcher: &SkimMatcherV2,
+    app: &ApplicationInfo,
+    query: &str,
+    tokens: &[&str],
+) -> Option<i64> {
+    let mut fields = Vec::new();
+    fields.push(Field::new(&app.name, 120, true));
     for keyword in &app.keywords {
         if keyword.is_empty() {
             continue;
         }
-
-        if let Some(score) = matcher.fuzzy_match(keyword, query) {
-            update_best(&mut best, 50 + score);
-        }
+        fields.push(Field::new(keyword.as_str(), 70, false));
     }
-
-    best
-}
-
-fn match_bookmark(matcher: &SkimMatcherV2, bookmark: &BookmarkEntry, query: &str) -> Option<i64> {
-    let mut best = matcher.fuzzy_match(&bookmark.title, query);
-
-    if let Some(pinyin_index) = &bookmark.pinyin_index {
+    if let Some(pinyin_index) = &app.pinyin_index {
         for entry in pinyin_index.split_whitespace() {
             let (full, initials) = split_pinyin_entry(entry);
             if let Some(full) = full {
-                if let Some(score) = matcher.fuzzy_match(full, query) {
-                    let weighted = 60 + score;
-                    if best.is_none_or(|current| weighted > current) {
-                        best = Some(weighted);
-                    }
-                }
+                fields.push(Field::new(full, 85, false));
             }
             if let Some(initials) = initials {
-                if let Some(score) = matcher.fuzzy_match(initials, query) {
-                    let weighted = 60 + score;
-                    if best.is_none_or(|current| weighted > current) {
-                        best = Some(weighted);
-                    }
-                }
+                fields.push(Field::new(initials, 95, false));
             }
         }
     }
 
+    score_fields(matcher, query, tokens, &fields)
+}
+
+fn match_bookmark(
+    matcher: &SkimMatcherV2,
+    bookmark: &BookmarkEntry,
+    query: &str,
+    tokens: &[&str],
+) -> Option<i64> {
+    let mut fields = Vec::new();
+    fields.push(Field::new(&bookmark.title, 110, true));
     if let Some(path) = &bookmark.folder_path {
-        if let Some(score) = matcher.fuzzy_match(path, query) {
-            let score = score - 5;
-            if best.is_none_or(|current| score > current) {
-                best = Some(score);
-            }
-        }
+        fields.push(Field::new(path.as_str(), 65, false));
     }
-
-    if let Some(score) = matcher
-        .fuzzy_match(&bookmark.url, query)
-        .map(|value| value - 8)
-    {
-        if best.is_none_or(|current| score > current) {
-            best = Some(score);
-        }
-    }
-
+    fields.push(Field::new(&bookmark.url, 45, false));
     for keyword in &bookmark.keywords {
         if keyword.is_empty() {
             continue;
         }
-
-        if let Some(score) = matcher.fuzzy_match(keyword, query) {
-            let score = score - 8;
-            if best.is_none_or(|current| score > current) {
-                best = Some(score);
+        fields.push(Field::new(keyword.as_str(), 55, false));
+    }
+    if let Some(pinyin_index) = &bookmark.pinyin_index {
+        for entry in pinyin_index.split_whitespace() {
+            let (full, initials) = split_pinyin_entry(entry);
+            if let Some(full) = full {
+                fields.push(Field::new(full, 80, false));
+            }
+            if let Some(initials) = initials {
+                fields.push(Field::new(initials, 90, false));
             }
         }
     }
 
-    best
+    score_fields(matcher, query, tokens, &fields)
 }
 
 fn split_pinyin_entry(entry: &str) -> (Option<&str>, Option<&str>) {
@@ -287,4 +253,92 @@ fn update_best(best: &mut Option<i64>, candidate: i64) {
     if best.is_none_or(|current| candidate > current) {
         *best = Some(candidate);
     }
+}
+
+#[derive(Clone, Copy)]
+struct Field<'a> {
+    text: &'a str,
+    weight: i64,
+    full_query_boost: bool,
+}
+
+impl<'a> Field<'a> {
+    fn new(text: &'a str, weight: i64, full_query_boost: bool) -> Self {
+        Self {
+            text,
+            weight,
+            full_query_boost,
+        }
+    }
+}
+
+fn tokenize_query(query: &str) -> Vec<&str> {
+    query
+        .split_whitespace()
+        .filter(|value| !value.is_empty())
+        .collect()
+}
+
+fn score_fields(
+    matcher: &SkimMatcherV2,
+    query: &str,
+    tokens: &[&str],
+    fields: &[Field<'_>],
+) -> Option<i64> {
+    let mut total = 0i64;
+    for token in tokens {
+        let mut best: Option<i64> = None;
+        for field in fields {
+            if let Some(score) = score_token(matcher, field, token) {
+                best = Some(best.map_or(score, |current| current.max(score)));
+            }
+        }
+        let Some(best_score) = best else {
+            return None;
+        };
+        total += best_score;
+    }
+
+    let query_lower = query.to_ascii_lowercase();
+    let mut bonus = None;
+    for field in fields.iter().filter(|field| field.full_query_boost) {
+        let field_lower = field.text.to_ascii_lowercase();
+        let score = if field_lower == query_lower {
+            140
+        } else if field_lower.starts_with(&query_lower) {
+            70
+        } else if field_lower.contains(&query_lower) {
+            30
+        } else {
+            0
+        };
+        if score > 0 {
+            update_best(&mut bonus, score + field.weight);
+        }
+    }
+    if let Some(extra) = bonus {
+        total += extra;
+    }
+
+    Some(total)
+}
+
+fn score_token(matcher: &SkimMatcherV2, field: &Field<'_>, token: &str) -> Option<i64> {
+    let fuzzy = matcher.fuzzy_match(field.text, token)?;
+    let token_lower = token.to_ascii_lowercase();
+    let field_lower = field.text.to_ascii_lowercase();
+    let mut score = fuzzy + field.weight;
+
+    if field_lower == token_lower {
+        score += 30;
+    } else if field_lower.starts_with(&token_lower) {
+        score += 18;
+    } else if field_lower.contains(&token_lower) {
+        score += 8;
+    }
+
+    let field_len = field.text.chars().count();
+    let token_len = token.chars().count();
+    let length_penalty = field_len.saturating_sub(token_len) as i64 / 6;
+    Some(score - length_penalty)
 }
