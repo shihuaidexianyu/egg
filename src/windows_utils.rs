@@ -3,25 +3,18 @@ use std::{
     ffi::OsStr,
     fs,
     os::windows::ffi::OsStrExt,
-    path::{Path, PathBuf},
+    path::Path,
     ptr,
 };
 
-use base64::{engine::general_purpose::STANDARD as BASE64, Engine};
-use image::{codecs::png::PngEncoder, ColorType, ImageEncoder};
 use log::warn;
-use sha1::{Digest, Sha1};
 use windows::Win32::UI::Input::KeyboardAndMouse::{
-    ActivateKeyboardLayout, LoadKeyboardLayoutW, KLF_ACTIVATE, KLF_SETFORPROCESS,
+    ActivateKeyboardLayout, LoadKeyboardLayoutW, KLF_ACTIVATE,
 };
 use windows::{
     core::{Error, Interface, Result, PCWSTR},
     Win32::{
         Foundation::RPC_E_CHANGED_MODE,
-        Graphics::Gdi::{
-            CreateCompatibleDC, DeleteDC, DeleteObject, GetDIBits, GetObjectW, BITMAP, BITMAPINFO,
-            BITMAPINFOHEADER, BI_RGB, DIB_RGB_COLORS, HDC,
-        },
         Storage::FileSystem::WIN32_FIND_DATAW,
         System::{
             Com::{
@@ -31,8 +24,7 @@ use windows::{
             Environment::ExpandEnvironmentStringsW,
         },
         UI::{
-            Shell::{ExtractIconExW, IShellLinkW, ShellLink, SLGP_RAWPATH, SLGP_UNCPRIORITY},
-            WindowsAndMessaging::{DestroyIcon, GetIconInfo, HICON, ICONINFO},
+            Shell::{IShellLinkW, ShellLink, SLGP_RAWPATH, SLGP_UNCPRIORITY},
         },
     },
 };
@@ -74,19 +66,15 @@ pub(crate) struct ShortcutInfo {
     pub arguments: Option<String>,
     pub working_directory: Option<String>,
     pub description: Option<String>,
-    pub icon_path: Option<String>,
-    pub icon_index: i32,
 }
 
 #[derive(Debug, Clone)]
 pub(crate) struct InternetShortcutInfo {
     pub url: String,
-    pub icon_path: Option<String>,
-    pub icon_index: i32,
     pub description: Option<String>,
 }
 
-/// Resolves `.lnk` shortcuts and extracts metadata such as target executable, arguments and icon info.
+/// Resolves `.lnk` shortcuts and extracts metadata such as target executable and arguments.
 pub(crate) fn resolve_shell_link(path: &Path) -> Option<ShortcutInfo> {
     #[cfg(target_os = "windows")]
     unsafe {
@@ -103,8 +91,6 @@ pub(crate) fn resolve_shell_link(path: &Path) -> Option<ShortcutInfo> {
             arguments: None,
             working_directory: None,
             description: None,
-            icon_path: None,
-            icon_index: 0,
         };
 
         let mut target_buffer = vec![0u16; BUFFER_LEN];
@@ -143,17 +129,6 @@ pub(crate) fn resolve_shell_link(path: &Path) -> Option<ShortcutInfo> {
                 wide_to_string(&desc_buffer).filter(|value| !value.trim().is_empty());
         }
 
-        let mut icon_buffer = vec![0u16; BUFFER_LEN];
-        let mut icon_index = 0i32;
-        if shell_link
-            .GetIconLocation(icon_buffer.as_mut_slice(), &mut icon_index)
-            .is_ok()
-        {
-            shortcut.icon_path =
-                wide_to_string(&icon_buffer).filter(|value| !value.trim().is_empty());
-            shortcut.icon_index = icon_index;
-        }
-
         Some(shortcut)
     }
 
@@ -164,7 +139,7 @@ pub(crate) fn resolve_shell_link(path: &Path) -> Option<ShortcutInfo> {
     }
 }
 
-/// Parses a `.url` Internet shortcut and extracts the target URL plus optional icon metadata.
+/// Parses a `.url` Internet shortcut and extracts the target URL plus metadata.
 pub(crate) fn parse_internet_shortcut(path: &Path) -> Option<InternetShortcutInfo> {
     let bytes = fs::read(path).ok()?;
     if bytes.is_empty() {
@@ -174,8 +149,6 @@ pub(crate) fn parse_internet_shortcut(path: &Path) -> Option<InternetShortcutInf
     let content = decode_shortcut_contents(&bytes)?;
     let mut in_section = false;
     let mut url = None;
-    let mut icon_path = None;
-    let mut icon_index = 0i32;
     let mut description = None;
 
     for raw_line in content.lines() {
@@ -205,12 +178,6 @@ pub(crate) fn parse_internet_shortcut(path: &Path) -> Option<InternetShortcutInf
 
         match key_lower.as_str() {
             "url" => url = Some(cleaned_value.to_string()),
-            "iconfile" => icon_path = Some(cleaned_value.to_string()),
-            "iconindex" => {
-                if let Ok(parsed) = cleaned_value.parse::<i32>() {
-                    icon_index = parsed;
-                }
-            }
             "description" | "comment" => {
                 description = Some(cleaned_value.to_string());
             }
@@ -221,8 +188,6 @@ pub(crate) fn parse_internet_shortcut(path: &Path) -> Option<InternetShortcutInf
     let url = url?;
     Some(InternetShortcutInfo {
         url,
-        icon_path,
-        icon_index,
         description,
     })
 }
@@ -265,87 +230,6 @@ pub(crate) fn expand_env_vars(value: &str) -> Option<String> {
     }
 }
 
-/// Extracts a large application icon and returns it as PNG encoded base64.
-pub(crate) fn extract_icon_from_path(path: &str, icon_index: i32) -> Option<String> {
-    if path.is_empty() {
-        return None;
-    }
-
-    let resolved = if path.contains('%') {
-        expand_env_vars(path).unwrap_or_else(|| path.to_string())
-    } else {
-        path.to_string()
-    };
-
-    if !Path::new(&resolved).exists() {
-        return None;
-    }
-
-    let wide_path = os_str_to_wide(OsStr::new(&resolved));
-    let mut icon = HICON::default();
-    let icon_index = icon_index.max(0);
-    let cache_key = icon_cache_key(&resolved, icon_index);
-
-    if let Some(encoded) = load_cached_icon(&cache_key) {
-        return Some(encoded);
-    }
-
-    unsafe {
-        let extracted = ExtractIconExW(
-            PCWSTR(wide_path.as_ptr()),
-            icon_index,
-            Some(&mut icon),
-            None,
-            1,
-        );
-        if extracted == 0 || icon.is_invalid() {
-            return None;
-        }
-
-        let encoded = icon_to_base64(icon);
-        // icon_to_base64 handles destroying the icon.
-        if let Some(ref data) = encoded {
-            store_cached_icon(&cache_key, data);
-        }
-        encoded
-    }
-}
-
-fn icon_cache_key(path: &str, icon_index: i32) -> String {
-    let mut hasher = Sha1::new();
-    hasher.update(path.to_lowercase().as_bytes());
-    hasher.update(icon_index.to_le_bytes());
-    let digest = hasher.finalize();
-    let mut hex = String::with_capacity(digest.len() * 2);
-    const LUT: &[u8; 16] = b"0123456789abcdef";
-    for byte in digest {
-        hex.push(LUT[(byte >> 4) as usize] as char);
-        hex.push(LUT[(byte & 0x0f) as usize] as char);
-    }
-    hex
-}
-
-fn load_cached_icon(key: &str) -> Option<String> {
-    let path = cache_file_path(key)?;
-    fs::read_to_string(path).ok()
-}
-
-fn store_cached_icon(key: &str, data: &str) {
-    if let Some(path) = cache_file_path(key) {
-        if let Some(parent) = path.parent() {
-            if fs::create_dir_all(parent).is_err() {
-                return;
-            }
-        }
-        let _ = fs::write(path, data);
-    }
-}
-
-fn cache_file_path(key: &str) -> Option<PathBuf> {
-    let mut dir = icon_cache_dir()?;
-    dir.push(format!("{key}.b64"));
-    Some(dir)
-}
 
 fn decode_shortcut_contents(bytes: &[u8]) -> Option<String> {
     if bytes.starts_with(&[0xFF, 0xFE]) {
@@ -374,118 +258,6 @@ fn decode_utf16(data: &[u8], little_endian: bool) -> String {
     String::from_utf16_lossy(&units)
 }
 
-fn icon_cache_dir() -> Option<PathBuf> {
-    let base = env::var("LOCALAPPDATA").ok()?;
-    Some(Path::new(&base).join("egg").join("icons"))
-}
-
-unsafe fn icon_to_base64(icon: HICON) -> Option<String> {
-    let mut icon_info: ICONINFO = std::mem::zeroed();
-    if GetIconInfo(icon, &mut icon_info).is_err() {
-        let _ = DestroyIcon(icon);
-        return None;
-    }
-
-    let color_bitmap = if !icon_info.hbmColor.is_invalid() {
-        icon_info.hbmColor
-    } else {
-        icon_info.hbmMask
-    };
-
-    if color_bitmap.is_invalid() {
-        cleanup_icon(&icon_info);
-        let _ = DestroyIcon(icon);
-        return None;
-    }
-
-    let mut bitmap: BITMAP = std::mem::zeroed();
-    if GetObjectW(
-        color_bitmap,
-        std::mem::size_of::<BITMAP>() as i32,
-        Some(&mut bitmap as *mut _ as *mut _),
-    ) == 0
-    {
-        cleanup_icon(&icon_info);
-        let _ = DestroyIcon(icon);
-        return None;
-    }
-
-    let width = bitmap.bmWidth as i32;
-    let mut height = bitmap.bmHeight as i32;
-    if icon_info.hbmColor.is_invalid() {
-        height /= 2;
-    }
-
-    if width <= 0 || height <= 0 {
-        cleanup_icon(&icon_info);
-        let _ = DestroyIcon(icon);
-        return None;
-    }
-
-    let mut info: BITMAPINFO = std::mem::zeroed();
-    info.bmiHeader.biSize = std::mem::size_of::<BITMAPINFOHEADER>() as u32;
-    info.bmiHeader.biWidth = width;
-    info.bmiHeader.biHeight = -height; // top-down DIB
-    info.bmiHeader.biPlanes = 1;
-    info.bmiHeader.biBitCount = 32;
-    info.bmiHeader.biCompression = BI_RGB.0;
-
-    let dc = CreateCompatibleDC(HDC::default());
-    if dc.is_invalid() {
-        cleanup_icon(&icon_info);
-        let _ = DestroyIcon(icon);
-        return None;
-    }
-
-    let mut pixels = vec![0u8; (width * height * 4) as usize];
-    if GetDIBits(
-        dc,
-        color_bitmap,
-        0,
-        height as u32,
-        Some(pixels.as_mut_ptr() as *mut _),
-        &mut info,
-        DIB_RGB_COLORS,
-    ) == 0
-    {
-        let _ = DeleteDC(dc);
-        cleanup_icon(&icon_info);
-        let _ = DestroyIcon(icon);
-        return None;
-    }
-
-    let _ = DeleteDC(dc);
-
-    // Convert BGRA -> RGBA
-    for chunk in pixels.chunks_exact_mut(4) {
-        chunk.swap(0, 2);
-    }
-
-    cleanup_icon(&icon_info);
-    let _ = DestroyIcon(icon);
-
-    let mut png = Vec::new();
-    {
-        let encoder = PngEncoder::new(&mut png);
-        if encoder
-            .write_image(&pixels, width as u32, height as u32, ColorType::Rgba8)
-            .is_err()
-        {
-            return None;
-        }
-    }
-
-    Some(BASE64.encode(png))
-}
-
-unsafe fn cleanup_icon(info: &ICONINFO) {
-    if !info.hbmColor.is_invalid() {
-        let _ = DeleteObject(info.hbmColor);
-    }
-    if !info.hbmMask.is_invalid() {
-        let _ = DeleteObject(info.hbmMask);
-    }
-}
 
 /// Switches the current keyboard layout to English (US) so the search框默认使用英文输入法。
 pub(crate) fn switch_to_english_input_method() {

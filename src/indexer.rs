@@ -4,19 +4,17 @@ use std::{
     path::{Path, PathBuf},
 };
 
-use base64::{engine::general_purpose::STANDARD as BASE64, Engine};
 use log::{debug, error, warn};
 use windows::{
-    core::Result as WinResult, Foundation::Size, Management::Deployment::PackageManager,
-    Storage::Streams::DataReader,
+    core::Result as WinResult, Management::Deployment::PackageManager,
 };
 use winreg::{enums::*, RegKey};
 
 use crate::{
     models::{AppType, ApplicationInfo},
-    text_utils::extend_keywords_with_pinyin,
+    text_utils::build_pinyin_index,
     windows_utils::{
-        expand_env_vars, extract_icon_from_path, parse_internet_shortcut, resolve_shell_link,
+        expand_env_vars, parse_internet_shortcut, resolve_shell_link,
     },
 };
 
@@ -24,7 +22,12 @@ use crate::{
 pub async fn build_index(exclusion_paths: Vec<String>) -> Vec<ApplicationInfo> {
     let mut results = Vec::new();
 
-    let start_menu = match tokio::task::spawn_blocking(enumerate_start_menu_programs).await {
+    let (start_menu_task, win32_task) = tokio::join!(
+        tokio::task::spawn_blocking(enumerate_start_menu_programs),
+        tokio::task::spawn_blocking(enumerate_installed_win32_apps),
+    );
+
+    let start_menu = match start_menu_task {
         Ok(apps) => apps,
         Err(err) => {
             warn!("start menu index task failed: {err}");
@@ -34,7 +37,7 @@ pub async fn build_index(exclusion_paths: Vec<String>) -> Vec<ApplicationInfo> {
     debug!("indexed {} start menu shortcuts", start_menu.len());
     results.extend(start_menu);
 
-    let win32 = match tokio::task::spawn_blocking(enumerate_installed_win32_apps).await {
+    let win32 = match win32_task {
         Ok(apps) => apps,
         Err(err) => {
             error!("win32 index task failed: {err}");
@@ -200,19 +203,14 @@ fn shortcut_to_application(path: &Path) -> Option<ApplicationInfo> {
         keywords.push(desc.clone());
     }
     keywords.retain(|value| !value.trim().is_empty());
-    extend_keywords_with_pinyin(&mut keywords);
     keywords.sort();
     keywords.dedup();
-
-    let icon_candidate = shortcut.icon_path.as_deref().and_then(sanitize_icon_source);
-    let icon_source = icon_candidate
-        .or_else(|| display_target.clone())
-        .unwrap_or_else(|| path.to_string_lossy().into_owned());
-    let icon_b64 = extract_icon_from_path(&icon_source, shortcut.icon_index).unwrap_or_default();
 
     let description = shortcut
         .description
         .filter(|value| !value.trim().is_empty());
+    let pinyin_index =
+        build_pinyin_index([Some(name.as_str()), description.as_deref()].into_iter().flatten());
     let path_string = path.to_string_lossy().into_owned();
     let working_directory = shortcut.working_directory.and_then(|value| {
         let trimmed = value.trim();
@@ -237,9 +235,9 @@ fn shortcut_to_application(path: &Path) -> Option<ApplicationInfo> {
         path: path_string,
         source_path: display_target,
         app_type: AppType::Win32,
-        icon_b64,
         description,
         keywords,
+        pinyin_index,
         working_directory,
         arguments,
     })
@@ -279,17 +277,13 @@ fn internet_shortcut_to_application(path: &Path) -> Option<ApplicationInfo> {
     {
         keywords.push(desc.to_string());
     }
-    extend_keywords_with_pinyin(&mut keywords);
     keywords.sort();
     keywords.dedup();
-
-    let icon_candidate = shortcut.icon_path.as_deref().and_then(sanitize_icon_source);
-    let icon_source = icon_candidate.unwrap_or_else(|| path.to_string_lossy().into_owned());
-    let icon_b64 = extract_icon_from_path(&icon_source, shortcut.icon_index).unwrap_or_default();
     let path_string = path.to_string_lossy().into_owned();
     let description = shortcut
         .description
         .filter(|value| !value.trim().is_empty());
+    let pinyin_index = build_pinyin_index([Some(name.as_str()), description.as_deref()].into_iter().flatten());
 
     Some(ApplicationInfo {
         id: format!("win32:url:{}", path_string.to_lowercase()),
@@ -297,9 +291,9 @@ fn internet_shortcut_to_application(path: &Path) -> Option<ApplicationInfo> {
         path: path_string,
         source_path: Some(normalized_url),
         app_type: AppType::Win32,
-        icon_b64,
         description,
         keywords,
+        pinyin_index,
         working_directory: None,
         arguments: None,
     })
@@ -331,15 +325,6 @@ fn startup_directories() -> Vec<PathBuf> {
     }
 
     startup.into_iter().filter(|path| path.is_dir()).collect()
-}
-
-fn sanitize_icon_source(raw: &str) -> Option<String> {
-    let expanded = expand_env_vars(raw).unwrap_or_else(|| raw.to_string());
-    if Path::new(&expanded).exists() {
-        Some(expanded)
-    } else {
-        None
-    }
 }
 
 fn enumerate_installed_win32_apps() -> Vec<ApplicationInfo> {
@@ -441,12 +426,10 @@ fn registry_entry_to_app(
     }
 
     keywords.retain(|value| !value.trim().is_empty());
-    extend_keywords_with_pinyin(&mut keywords);
     keywords.sort();
     keywords.dedup();
-
-    let icon_source = display_icon_path.unwrap_or_else(|| path.clone());
-    let icon_b64 = extract_icon_from_path(&icon_source, 0).unwrap_or_default();
+    let pinyin_index =
+        build_pinyin_index([Some(display_name.as_str()), description.as_deref()].into_iter().flatten());
 
     Some(ApplicationInfo {
         id: format!("win32:installed:{}:{}", parent_path, entry_name).to_lowercase(),
@@ -454,9 +437,9 @@ fn registry_entry_to_app(
         path: path.clone(),
         source_path: Some(path),
         app_type: AppType::Win32,
-        icon_b64,
         description,
         keywords,
+        pinyin_index,
         working_directory: None,
         arguments: None,
     })
@@ -576,11 +559,11 @@ async fn enumerate_uwp_apps() -> WinResult<Vec<ApplicationInfo>> {
                 }
             }
             keywords.retain(|value| !value.is_empty());
-            extend_keywords_with_pinyin(&mut keywords);
             keywords.sort();
             keywords.dedup();
-
-            let icon_b64 = load_uwp_logo(&display_info).unwrap_or_default();
+            let pinyin_index = build_pinyin_index(
+                [Some(display_name.as_str()), description.as_deref()].into_iter().flatten(),
+            );
 
             applications.push(ApplicationInfo {
                 id: format!("uwp:{}", app_id.to_lowercase()),
@@ -588,9 +571,9 @@ async fn enumerate_uwp_apps() -> WinResult<Vec<ApplicationInfo>> {
                 path: app_id,
                 source_path: None,
                 app_type: AppType::Uwp,
-                icon_b64,
                 description,
                 keywords,
+                pinyin_index,
                 working_directory: None,
                 arguments: None,
             });
@@ -600,31 +583,3 @@ async fn enumerate_uwp_apps() -> WinResult<Vec<ApplicationInfo>> {
     Ok(applications)
 }
 
-fn load_uwp_logo(display_info: &windows::ApplicationModel::AppDisplayInfo) -> Option<String> {
-    let logo_ref = display_info
-        .GetLogo(Size {
-            Width: 64.0,
-            Height: 64.0,
-        })
-        .ok()?;
-
-    let stream = logo_ref.OpenReadAsync().ok()?.get().ok()?;
-    let size = stream.Size().ok()? as usize;
-    if size == 0 {
-        let _ = stream.Close();
-        return None;
-    }
-
-    let reader = DataReader::CreateDataReader(&stream).ok()?;
-    reader.LoadAsync(size as u32).ok()?.get().ok()?;
-    let mut buffer = vec![0u8; size];
-    if reader.ReadBytes(buffer.as_mut_slice()).is_err() {
-        let _ = reader.Close();
-        let _ = stream.Close();
-        return None;
-    }
-    let _ = reader.Close();
-    let _ = stream.Close();
-
-    Some(BASE64.encode(buffer))
-}

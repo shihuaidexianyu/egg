@@ -6,16 +6,17 @@ pub enum AppType {
     Uwp,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct ApplicationInfo {
     pub id: String,
     pub name: String,
     pub path: String,
     pub source_path: Option<String>,
     pub app_type: AppType,
-    pub icon_b64: String,
     pub description: Option<String>,
     pub keywords: Vec<String>,
+    #[serde(default)]
+    pub pinyin_index: Option<String>,
     pub working_directory: Option<String>,
     pub arguments: Option<String>,
 }
@@ -25,7 +26,6 @@ pub struct SearchResult {
     pub id: String,
     pub title: String,
     pub subtitle: String,
-    pub icon: String,
     pub score: i64,
     pub action_id: String,
 }

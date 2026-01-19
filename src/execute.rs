@@ -2,8 +2,10 @@ use std::{
     ffi::{OsStr, OsString},
     path::Path,
     ptr,
+    sync::mpsc,
 };
 
+use once_cell::sync::Lazy;
 use windows::{
     core::{HSTRING, PCWSTR},
     Win32::{
@@ -22,6 +24,42 @@ use crate::{
     state::PendingAction,
     windows_utils::{os_str_to_wide, ComGuard},
 };
+
+static UWP_LAUNCHER: Lazy<UwpLauncher> = Lazy::new(UwpLauncher::new);
+
+struct UwpRequest {
+    app_id: String,
+    response: mpsc::Sender<Result<(), String>>,
+}
+
+struct UwpLauncher {
+    sender: mpsc::Sender<UwpRequest>,
+}
+
+impl UwpLauncher {
+    fn new() -> Self {
+        let (sender, receiver) = mpsc::channel::<UwpRequest>();
+        std::thread::spawn(move || uwp_thread_loop(receiver));
+        Self { sender }
+    }
+}
+
+fn uwp_thread_loop(receiver: mpsc::Receiver<UwpRequest>) {
+    for request in receiver {
+        let result = (|| unsafe {
+            let _guard = ComGuard::new().map_err(|err| err.to_string())?;
+            let manager: IApplicationActivationManager =
+                CoCreateInstance(&ApplicationActivationManager, None, CLSCTX_LOCAL_SERVER)
+                    .map_err(|err| err.to_string())?;
+            let app_id = HSTRING::from(request.app_id);
+            manager
+                .ActivateApplication(&app_id, PCWSTR::null(), ACTIVATEOPTIONS::default())
+                .map_err(|err| err.to_string())?;
+            Ok(())
+        })();
+        let _ = request.response.send(result);
+    }
+}
 
 /// Execute a pending action (launch app, open URL, etc.)
 pub fn execute_action(action: &PendingAction, run_as_admin: bool) -> Result<(), String> {
@@ -73,19 +111,17 @@ fn shell_execute_path(path: &Path, run_as_admin: bool) -> Result<(), String> {
 }
 
 fn launch_uwp_app(app_id: &str) -> Result<(), String> {
-    unsafe {
-        let _guard = ComGuard::new().map_err(|err| err.to_string())?;
-
-        let manager: IApplicationActivationManager =
-            CoCreateInstance(&ApplicationActivationManager, None, CLSCTX_LOCAL_SERVER)
-                .map_err(|err| err.to_string())?;
-
-        let app_id = HSTRING::from(app_id);
-        let _process_id = manager
-            .ActivateApplication(&app_id, PCWSTR::null(), ACTIVATEOPTIONS::default())
-            .map_err(|err| err.to_string())?;
-        Ok(())
-    }
+    let (response_tx, response_rx) = mpsc::channel();
+    UWP_LAUNCHER
+        .sender
+        .send(UwpRequest {
+            app_id: app_id.to_string(),
+            response: response_tx,
+        })
+        .map_err(|_| "UWP 启动线程不可用".to_string())?;
+    response_rx
+        .recv()
+        .map_err(|_| "UWP 启动线程不可用".to_string())?
 }
 
 fn launch_from_source(

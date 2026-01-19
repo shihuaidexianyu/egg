@@ -1,4 +1,5 @@
 mod bookmarks;
+mod cache;
 mod config;
 mod search_core;
 mod execute;
@@ -11,17 +12,18 @@ mod windows_utils;
 use std::{
     io::{self, Write},
     sync::Arc,
+    time::Duration,
 };
 
 use anyhow::Result;
-use log::{info, debug};
+use log::{debug, info, warn};
 
 use crate::{
     config::AppConfig,
     search_core as core,
     execute::execute_action,
     indexer::build_index,
-    state::{AppState, PendingAction},
+    state::{AppState, CachedSearch, PendingAction},
 };
 
 #[tokio::main]
@@ -44,20 +46,47 @@ async fn main() -> Result<()> {
         *config_guard = config.clone();
     }
 
-    // Build indexes
-    println!("Building application index...");
-    let exclusion_paths = config.system_tool_exclusions.clone();
-    let apps = build_index(exclusion_paths).await;
-    info!("Indexed {} applications", apps.len());
+    if let Some(cached_apps) = cache::load_app_index() {
+        if !cached_apps.is_empty() {
+            info!("Loaded {} cached applications", cached_apps.len());
+            let mut app_index = state.app_index.lock().unwrap();
+            *app_index = cached_apps;
+        }
+    }
 
+    println!("Building application index...");
     println!("Loading bookmarks...");
-    let bookmarks = bookmarks::load_chrome_bookmarks();
+    let exclusion_paths = config.system_tool_exclusions.clone();
+    let (apps_task, bookmarks_task) = tokio::join!(
+        tokio::spawn(async move { build_index(exclusion_paths).await }),
+        tokio::task::spawn_blocking(bookmarks::load_chrome_bookmarks),
+    );
+    let apps = match apps_task {
+        Ok(apps) => apps,
+        Err(err) => {
+            warn!("app index task failed: {err}");
+            Vec::new()
+        }
+    };
+    let bookmarks = match bookmarks_task {
+        Ok(bookmarks) => bookmarks,
+        Err(err) => {
+            warn!("bookmark index task failed: {err}");
+            Vec::new()
+        }
+    };
+    info!("Indexed {} applications", apps.len());
     info!("Loaded {} bookmarks", bookmarks.len());
 
-    // Store indexes in state
-    {
+    if !apps.is_empty() {
         let mut app_index = state.app_index.lock().unwrap();
-        *app_index = apps;
+        if *app_index != apps {
+            *app_index = apps.clone();
+            let _ = cache::save_app_index(&apps);
+            if let Ok(mut cache_guard) = state.search_cache.lock() {
+                cache_guard.clear();
+            }
+        }
     }
     {
         let mut bookmark_index = state.bookmark_index.lock().unwrap();
@@ -70,6 +99,31 @@ async fn main() -> Result<()> {
         state.bookmark_index.lock().unwrap().len()
     );
     println!("Type a query to search, or 'help' for commands.\n");
+
+    let refresh_state = state.clone();
+    let refresh_exclusions = config.system_tool_exclusions.clone();
+    tokio::spawn(async move {
+        tokio::time::sleep(Duration::from_secs(2)).await;
+        let refreshed = build_index(refresh_exclusions).await;
+        if refreshed.is_empty() {
+            return;
+        }
+
+        let mut updated = false;
+        if let Ok(mut guard) = refresh_state.app_index.lock() {
+            if *guard != refreshed {
+                *guard = refreshed.clone();
+                updated = true;
+            }
+        }
+
+        if updated {
+            let _ = cache::save_app_index(&refreshed);
+            if let Ok(mut cache_guard) = refresh_state.search_cache.lock() {
+                cache_guard.clear();
+            }
+        }
+    });
 
     // REPL loop
     run_repl(state).await?;
@@ -127,6 +181,26 @@ async fn run_repl(state: Arc<AppState>) -> Result<()> {
                 let config_snapshot = state.config.lock().unwrap().clone();
                 let app_index = state.app_index.lock().unwrap().clone();
                 let bookmark_index = state.bookmark_index.lock().unwrap().clone();
+                let cache_key = format!(
+                    "{}|{}|{}|{}",
+                    trimmed,
+                    config_snapshot.enable_app_results,
+                    config_snapshot.enable_bookmark_results,
+                    config_snapshot.max_results
+                );
+
+                if let Ok(mut cache_guard) = state.search_cache.lock() {
+                    if let Some(cached) = cache_guard.get(&cache_key) {
+                        current_results.clear();
+                        for result in &cached.results {
+                            if let Some(action) = cached.pending_actions.get(&result.id) {
+                                current_results.push((result.clone(), action.clone()));
+                            }
+                        }
+                        display_results(&current_results);
+                        continue;
+                    }
+                }
 
                 let (results, pending_actions) = core::search(
                     trimmed.to_string(),
@@ -135,6 +209,16 @@ async fn run_repl(state: Arc<AppState>) -> Result<()> {
                     &bookmark_index,
                     &config_snapshot,
                 );
+
+                if let Ok(mut cache_guard) = state.search_cache.lock() {
+                    cache_guard.insert(
+                        cache_key,
+                        CachedSearch {
+                            results: results.clone(),
+                            pending_actions: pending_actions.clone(),
+                        },
+                    );
+                }
 
                 // Store pending actions with their results
                 current_results.clear();
@@ -173,7 +257,7 @@ fn display_results(results: &[(crate::models::SearchResult, PendingAction)]) {
 }
 
 fn execute_by_index(
-    state: Arc<AppState>,
+    _state: Arc<AppState>,
     results: &[(crate::models::SearchResult, PendingAction)],
     index: usize,
 ) -> Result<()> {
@@ -209,15 +293,23 @@ async fn trigger_reindex(state: Arc<AppState>) -> Result<()> {
         config.system_tool_exclusions.clone()
     };
 
-    let apps = build_index(exclusion_paths).await;
+    let (apps_task, bookmarks_task) = tokio::join!(
+        tokio::spawn(async move { build_index(exclusion_paths).await }),
+        tokio::task::spawn_blocking(bookmarks::load_chrome_bookmarks),
+    );
+    let apps = apps_task.unwrap_or_default();
     if let Ok(mut guard) = app_index.lock() {
-        *guard = apps;
+        *guard = apps.clone();
     }
+    let _ = cache::save_app_index(&apps);
 
-    // Reindex bookmarks
-    let bookmarks = bookmarks::load_chrome_bookmarks();
+    let bookmarks = bookmarks_task.unwrap_or_default();
     if let Ok(mut guard) = bookmark_index.lock() {
         *guard = bookmarks;
+    }
+
+    if let Ok(mut cache_guard) = state.search_cache.lock() {
+        cache_guard.clear();
     }
 
     Ok(())

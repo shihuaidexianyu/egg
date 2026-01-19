@@ -15,9 +15,7 @@ console = "0.15"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 fuzzy-matcher = "0.3"
-base64 = "0.22"
 urlencoding = "2"
-image = { version = "0.24", default-features = false, features = ["png"] }
 sha1 = "0.10"
 winreg = "0.52"
 windows = { version = "0.58", features = [

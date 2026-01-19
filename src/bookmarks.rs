@@ -6,8 +6,9 @@ use std::{
 use log::{debug, warn};
 use serde_json::Value;
 use sha1::{Digest, Sha1};
+use winreg::{enums::*, RegKey};
 
-use crate::text_utils::extend_keywords_with_pinyin;
+use crate::text_utils::build_pinyin_index;
 
 #[derive(Debug, Clone)]
 pub struct BookmarkEntry {
@@ -16,6 +17,7 @@ pub struct BookmarkEntry {
     pub url: String,
     pub folder_path: Option<String>,
     pub keywords: Vec<String>,
+    pub pinyin_index: Option<String>,
 }
 
 /// Loads Chrome bookmark entries from all detected profiles under LOCALAPPDATA.
@@ -59,27 +61,73 @@ pub fn load_chrome_bookmarks() -> Vec<BookmarkEntry> {
 
 fn chrome_profile_dirs() -> Vec<PathBuf> {
     let mut results = Vec::new();
-    let Ok(local_app_data) = env::var("LOCALAPPDATA") else {
-        return results;
-    };
-    let base_path = Path::new(&local_app_data)
-        .join("Google")
-        .join("Chrome")
-        .join("User Data");
-    if !base_path.is_dir() {
-        return results;
+    for root in chrome_user_data_roots() {
+        if let Ok(entries) = fs::read_dir(&root) {
+            for entry in entries.flatten() {
+                let path = entry.path();
+                if path.is_dir() && path.join("Bookmarks").is_file() {
+                    results.push(path);
+                }
+            }
+        }
+    }
+    results.sort();
+    results.dedup();
+    results
+}
+
+fn chrome_user_data_roots() -> Vec<PathBuf> {
+    let mut roots = Vec::new();
+    if let Ok(local_app_data) = env::var("LOCALAPPDATA") {
+        let default_root = Path::new(&local_app_data)
+            .join("Google")
+            .join("Chrome")
+            .join("User Data");
+        if default_root.is_dir() {
+            roots.push(default_root);
+        }
     }
 
-    if let Ok(entries) = fs::read_dir(&base_path) {
-        for entry in entries.flatten() {
-            let path = entry.path();
-            if path.is_dir() && path.join("Bookmarks").is_file() {
-                results.push(path);
+    if let Some(exe_path) = chrome_executable_path() {
+        if let Some(exe_dir) = exe_path.parent() {
+            let mut candidates = Vec::new();
+            candidates.push(exe_dir.join("User Data"));
+            candidates.push(exe_dir.join("Data"));
+            if let Some(parent) = exe_dir.parent() {
+                candidates.push(parent.join("User Data"));
+                candidates.push(parent.join("Data"));
+            }
+            for candidate in candidates {
+                if candidate.is_dir() {
+                    roots.push(candidate);
+                }
             }
         }
     }
 
-    results
+    roots.sort();
+    roots.dedup();
+    roots
+}
+
+fn chrome_executable_path() -> Option<PathBuf> {
+    let roots = [
+        RegKey::predef(HKEY_LOCAL_MACHINE),
+        RegKey::predef(HKEY_CURRENT_USER),
+    ];
+    for root in roots {
+        if let Ok(key) = root
+            .open_subkey(r"SOFTWARE\Microsoft\Windows\CurrentVersion\App Paths\chrome.exe")
+        {
+            if let Ok(path) = key.get_value::<String, _>("") {
+                let trimmed = path.trim().trim_matches('"');
+                if !trimmed.is_empty() {
+                    return Some(PathBuf::from(trimmed));
+                }
+            }
+        }
+    }
+    None
 }
 
 fn collect_entries_from_file(json: &Value, profile_label: &str, acc: &mut Vec<BookmarkEntry>) {
@@ -167,9 +215,13 @@ fn collect_node(
             }
             keywords.push(profile_label.to_string());
             keywords.retain(|value| !value.trim().is_empty());
-            extend_keywords_with_pinyin(&mut keywords);
             keywords.sort();
             keywords.dedup();
+            let pinyin_index = build_pinyin_index(
+                [Some(title), folder_path.as_deref(), Some(profile_label)]
+                    .into_iter()
+                    .flatten(),
+            );
 
             let id = derive_bookmark_id(profile_label, node, url);
             acc.push(BookmarkEntry {
@@ -178,6 +230,7 @@ fn collect_node(
                 url: url.to_string(),
                 folder_path,
                 keywords,
+                pinyin_index,
             });
         }
         _ => {}

@@ -81,14 +81,13 @@ pub fn search(
     if is_url_like(trimmed) {
         let result_id = format!("url-{counter}");
         pending_actions.insert(result_id.clone(), PendingAction::Url(trimmed.to_string()));
-        results.push(SearchResult {
-            id: result_id,
-            title: format!("打开网址: {trimmed}"),
-            subtitle: trimmed.to_string(),
-            icon: String::new(),
-            score: 200,
-            action_id: "url".to_string(),
-        });
+                results.push(SearchResult {
+                    id: result_id,
+                    title: format!("打开网址: {trimmed}"),
+                    subtitle: trimmed.to_string(),
+                    score: 200,
+                    action_id: "url".to_string(),
+                });
         counter += 1;
     }
 
@@ -110,7 +109,6 @@ pub fn search(
                     id: result_id,
                     title: app.name.clone(),
                     subtitle,
-                    icon: app.icon_b64.clone(),
                     score,
                     action_id: match app.app_type {
                         AppType::Win32 => "app".to_string(),
@@ -135,7 +133,6 @@ pub fn search(
                     id: result_id,
                     title: bookmark.title.clone(),
                     subtitle,
-                    icon: String::new(),
                     score,
                     action_id: "bookmark".to_string(),
                 });
@@ -161,7 +158,6 @@ pub fn search(
             id: search_id,
             title: format!("在 Google 上搜索: {trimmed}"),
             subtitle: String::from("Google 搜索"),
-            icon: String::new(),
             score: i64::MIN,
             action_id: "search".to_string(),
         });
@@ -177,7 +173,32 @@ fn is_url_like(input: &str) -> bool {
 }
 
 fn match_application(matcher: &SkimMatcherV2, app: &ApplicationInfo, query: &str) -> Option<i64> {
-    let mut best = matcher.fuzzy_match(&app.name, query);
+    let mut best = None;
+    let query_lower = query.to_ascii_lowercase();
+
+    if let Some(score) = matcher.fuzzy_match(&app.name, query) {
+        let mut weighted = 100 + score;
+        if app.name.to_ascii_lowercase().starts_with(&query_lower) {
+            weighted += 20;
+        }
+        update_best(&mut best, weighted);
+    }
+
+    if let Some(pinyin_index) = &app.pinyin_index {
+        for entry in pinyin_index.split_whitespace() {
+            let (full, initials) = split_pinyin_entry(entry);
+            if let Some(full) = full {
+                if let Some(score) = matcher.fuzzy_match(full, query) {
+                    update_best(&mut best, 70 + score);
+                }
+            }
+            if let Some(initials) = initials {
+                if let Some(score) = matcher.fuzzy_match(initials, query) {
+                    update_best(&mut best, 80 + score);
+                }
+            }
+        }
+    }
 
     for keyword in &app.keywords {
         if keyword.is_empty() {
@@ -185,10 +206,7 @@ fn match_application(matcher: &SkimMatcherV2, app: &ApplicationInfo, query: &str
         }
 
         if let Some(score) = matcher.fuzzy_match(keyword, query) {
-            let score = score - 5; // prefer primary name
-            if best.is_none_or(|current| score > current) {
-                best = Some(score);
-            }
+            update_best(&mut best, 50 + score);
         }
     }
 
@@ -197,6 +215,28 @@ fn match_application(matcher: &SkimMatcherV2, app: &ApplicationInfo, query: &str
 
 fn match_bookmark(matcher: &SkimMatcherV2, bookmark: &BookmarkEntry, query: &str) -> Option<i64> {
     let mut best = matcher.fuzzy_match(&bookmark.title, query);
+
+    if let Some(pinyin_index) = &bookmark.pinyin_index {
+        for entry in pinyin_index.split_whitespace() {
+            let (full, initials) = split_pinyin_entry(entry);
+            if let Some(full) = full {
+                if let Some(score) = matcher.fuzzy_match(full, query) {
+                    let weighted = 60 + score;
+                    if best.is_none_or(|current| weighted > current) {
+                        best = Some(weighted);
+                    }
+                }
+            }
+            if let Some(initials) = initials {
+                if let Some(score) = matcher.fuzzy_match(initials, query) {
+                    let weighted = 60 + score;
+                    if best.is_none_or(|current| weighted > current) {
+                        best = Some(weighted);
+                    }
+                }
+            }
+        }
+    }
 
     if let Some(path) = &bookmark.folder_path {
         if let Some(score) = matcher.fuzzy_match(path, query) {
@@ -230,4 +270,23 @@ fn match_bookmark(matcher: &SkimMatcherV2, bookmark: &BookmarkEntry, query: &str
     }
 
     best
+}
+
+fn split_pinyin_entry(entry: &str) -> (Option<&str>, Option<&str>) {
+    if let Some((full, initials)) = entry.split_once('|') {
+        (
+            if full.is_empty() { None } else { Some(full) },
+            if initials.is_empty() { None } else { Some(initials) },
+        )
+    } else if entry.is_empty() {
+        (None, None)
+    } else {
+        (Some(entry), None)
+    }
+}
+
+fn update_best(best: &mut Option<i64>, candidate: i64) {
+    if best.is_none_or(|current| candidate > current) {
+        *best = Some(candidate);
+    }
 }

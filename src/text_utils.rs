@@ -1,22 +1,26 @@
 use pinyin::ToPinyin;
 
-/// Extend the given keyword list with pinyin variants so that
-/// fuzzy matching can work with full pinyin and initials.
-pub fn extend_keywords_with_pinyin(keywords: &mut Vec<String>) {
-    let mut additions = Vec::new();
-    for keyword in keywords.iter() {
-        extend_single_keyword(keyword, &mut additions);
+/// Build a compact pinyin index string from multiple text fragments.
+/// The format is "full|initials" joined by spaces for multiple fragments.
+pub fn build_pinyin_index<'a, I>(texts: I) -> Option<String>
+where
+    I: IntoIterator<Item = &'a str>,
+{
+    let mut parts = Vec::new();
+    for text in texts {
+        if let Some(part) = build_single_index(text) {
+            parts.push(part);
+        }
     }
 
-    if additions.is_empty() {
-        return;
+    if parts.is_empty() {
+        None
+    } else {
+        Some(parts.join(" "))
     }
-
-    keywords.extend(additions);
 }
 
-fn extend_single_keyword(source: &str, target: &mut Vec<String>) {
-    // Track whether at least one Chinese character produced a syllable.
+fn build_single_index(source: &str) -> Option<String> {
     let mut syllables: Vec<String> = Vec::new();
     let mut initials = String::new();
 
@@ -41,25 +45,17 @@ fn extend_single_keyword(source: &str, target: &mut Vec<String>) {
     }
 
     if syllables.is_empty() {
-        return;
+        return None;
     }
 
-    // 连写形式，例如 "weixin"。
     let joined = syllables.join("");
-    if !joined.is_empty() {
-        target.push(joined);
+    if joined.is_empty() {
+        return None;
     }
 
-    // 带空格的形式，例如 "wei xin"，有利于分词匹配。
-    if syllables.len() > 1 {
-        let spaced = syllables.join(" ");
-        if !spaced.is_empty() {
-            target.push(spaced);
-        }
-    }
-
-    // 首字母缩写，例如 "wx"。
-    if !initials.is_empty() {
-        target.push(initials);
+    if !initials.is_empty() && initials != joined {
+        Some(format!("{joined}|{initials}"))
+    } else {
+        Some(joined)
     }
 }
