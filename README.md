@@ -84,16 +84,10 @@ Default configuration:
 ```json
 {
   "global_hotkey": "Alt+Space",
-  "query_delay_ms": 120,
+  "blacklist_hotkey": "Ctrl+B",
   "max_results": 40,
   "enable_app_results": true,
   "enable_bookmark_results": true,
-  "prefix_app": "R",
-  "prefix_bookmark": "B",
-  "prefix_search": "S",
-  "launch_on_startup": false,
-  "force_english_input": true,
-  "debug_mode": false,
   "system_tool_exclusions": [
     "c:\\windows\\system32",
     "c:\\windows\\syswow64",
