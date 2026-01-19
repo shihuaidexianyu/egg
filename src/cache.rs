@@ -33,5 +33,10 @@ pub fn save_app_index(apps: &[ApplicationInfo]) -> Result<(), String> {
 
 fn cache_path() -> Option<PathBuf> {
     let base = env::var("LOCALAPPDATA").ok()?;
-    Some(PathBuf::from(base).join("egg").join("cache").join(INDEX_CACHE_FILE))
+    Some(
+        PathBuf::from(base)
+            .join("egg")
+            .join("cache")
+            .join(INDEX_CACHE_FILE),
+    )
 }

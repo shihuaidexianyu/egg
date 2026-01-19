@@ -1,11 +1,4 @@
-use std::{
-    env,
-    ffi::OsStr,
-    fs,
-    os::windows::ffi::OsStrExt,
-    path::Path,
-    ptr,
-};
+use std::{env, ffi::OsStr, fs, os::windows::ffi::OsStrExt, path::Path, ptr};
 
 use log::warn;
 use windows::Win32::UI::Input::KeyboardAndMouse::{
@@ -23,9 +16,7 @@ use windows::{
             },
             Environment::ExpandEnvironmentStringsW,
         },
-        UI::{
-            Shell::{IShellLinkW, ShellLink, SLGP_RAWPATH, SLGP_UNCPRIORITY},
-        },
+        UI::Shell::{IShellLinkW, ShellLink, SLGP_RAWPATH, SLGP_UNCPRIORITY},
     },
 };
 #[cfg(target_os = "windows")]
@@ -186,10 +177,7 @@ pub(crate) fn parse_internet_shortcut(path: &Path) -> Option<InternetShortcutInf
     }
 
     let url = url?;
-    Some(InternetShortcutInfo {
-        url,
-        description,
-    })
+    Some(InternetShortcutInfo { url, description })
 }
 
 /// Converts an [`OsStr`] into a null-terminated wide string buffer suitable for Win32 APIs.
@@ -230,7 +218,6 @@ pub(crate) fn expand_env_vars(value: &str) -> Option<String> {
     }
 }
 
-
 fn decode_shortcut_contents(bytes: &[u8]) -> Option<String> {
     if bytes.starts_with(&[0xFF, 0xFE]) {
         Some(decode_utf16(&bytes[2..], true))
@@ -258,23 +245,70 @@ fn decode_utf16(data: &[u8], little_endian: bool) -> String {
     String::from_utf16_lossy(&units)
 }
 
+/// Centers and focuses the current console window.
+pub(crate) fn focus_and_center_console_window() {
+    #[cfg(target_os = "windows")]
+    unsafe {
+        use windows::Win32::{
+            Foundation::RECT,
+            System::Console::GetConsoleWindow,
+            UI::WindowsAndMessaging::{
+                GetSystemMetrics, GetWindowRect, MoveWindow, SetForegroundWindow, ShowWindow,
+                SM_CXSCREEN, SM_CYSCREEN, SW_RESTORE,
+            },
+        };
+
+        let hwnd = GetConsoleWindow();
+        if hwnd.0.is_null() {
+            return;
+        }
+
+        let mut rect = RECT::default();
+        if GetWindowRect(hwnd, &mut rect).is_err() {
+            return;
+        }
+
+        let width = rect.right - rect.left;
+        let height = rect.bottom - rect.top;
+        if width <= 0 || height <= 0 {
+            return;
+        }
+
+        let screen_width = GetSystemMetrics(SM_CXSCREEN);
+        let screen_height = GetSystemMetrics(SM_CYSCREEN);
+        let x = ((screen_width - width) / 2).max(0);
+        let y = ((screen_height - height) / 2).max(0);
+
+        let _ = ShowWindow(hwnd, SW_RESTORE);
+        let _ = MoveWindow(hwnd, x, y, width, height, true);
+        let _ = SetForegroundWindow(hwnd);
+    }
+
+    #[cfg(not(target_os = "windows"))]
+    {
+        // no-op
+    }
+}
 
 /// Switches the current keyboard layout to English (US) so the search框默认使用英文输入法。
 #[allow(dead_code)]
 pub(crate) fn switch_to_english_input_method() {
     #[cfg(target_os = "windows")]
     unsafe {
-        use windows::Win32::UI::Input::KeyboardAndMouse::{
-            GetKeyboardLayout, ActivateKeyboardLayout,
-        };
         use windows::core::w;
-        
+        use windows::Win32::UI::Input::KeyboardAndMouse::{
+            ActivateKeyboardLayout, GetKeyboardLayout,
+        };
+
         log::info!("=== Switching to English IME ===");
-        
+
         // Get current layout before switching
         let current_layout = GetKeyboardLayout(0);
-        log::info!("Current layout before switch: 0x{:x}", current_layout.0 as isize);
-        
+        log::info!(
+            "Current layout before switch: 0x{:x}",
+            current_layout.0 as isize
+        );
+
         // First, get or load the English layout handle
         let en_us_layout = match LoadKeyboardLayoutW(w!("00000409"), KLF_ACTIVATE) {
             Ok(value) => {
@@ -354,11 +388,12 @@ pub(crate) fn configure_launch_on_startup(enable: bool) -> std::result::Result<(
             let exe_path = env::current_exe().map_err(|err| err.to_string())?;
             let exe_value = {
                 let raw = exe_path.as_os_str().to_string_lossy();
-                if raw.contains(' ') {
+                let base = if raw.contains(' ') {
                     format!("\"{raw}\"")
                 } else {
                     raw.into_owned()
-                }
+                };
+                format!("{base} --daemon")
             };
             key.set_value(VALUE_NAME, &exe_value)
                 .map_err(|err| err.to_string())

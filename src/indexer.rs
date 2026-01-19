@@ -6,12 +6,12 @@ use std::{
 
 use log::{debug, error, warn};
 use windows::{
-    core::{Error as WinError, HSTRING, HRESULT, PWSTR, Result as WinResult},
+    core::{Error as WinError, Result as WinResult, HRESULT, HSTRING, PWSTR},
     Management::Deployment::PackageManager,
     Win32::{
-        Foundation::{CloseHandle, HLOCAL, HANDLE, LocalFree},
-        Security::{GetTokenInformation, TokenUser, TOKEN_QUERY, TOKEN_USER},
+        Foundation::{CloseHandle, LocalFree, HANDLE, HLOCAL},
         Security::Authorization::ConvertSidToStringSidW,
+        Security::{GetTokenInformation, TokenUser, TOKEN_QUERY, TOKEN_USER},
         System::Threading::{GetCurrentProcess, OpenProcessToken},
     },
 };
@@ -20,9 +20,7 @@ use winreg::{enums::*, RegKey};
 use crate::{
     models::{AppType, ApplicationInfo},
     text_utils::build_pinyin_index,
-    windows_utils::{
-        expand_env_vars, parse_internet_shortcut, resolve_shell_link,
-    },
+    windows_utils::{expand_env_vars, parse_internet_shortcut, resolve_shell_link},
 };
 
 /// Build the application index by scanning Start Menu shortcuts, installed Win32 software and UWP apps.
@@ -77,10 +75,10 @@ pub async fn build_index(exclusion_paths: Vec<String>) -> Vec<ApplicationInfo> {
         seen.insert((app.app_type.clone(), key_path, argument_key))
     });
     results.sort_by(|a, b| a.name.to_lowercase().cmp(&b.name.to_lowercase()));
-    
+
     // Filter out system tools based on path
     results.retain(|app| !is_system_tool(app, &exclusion_paths));
-    
+
     results
 }
 
@@ -88,7 +86,7 @@ pub async fn build_index(exclusion_paths: Vec<String>) -> Vec<ApplicationInfo> {
 fn is_system_tool(app: &ApplicationInfo, exclusion_paths: &[String]) -> bool {
     let path_to_check = app.source_path.as_ref().unwrap_or(&app.path);
     let path_lower = path_to_check.to_ascii_lowercase();
-    
+
     // Check if the app is in any excluded directory
     for sys_path in exclusion_paths {
         let sys_path_lower = sys_path.to_ascii_lowercase();
@@ -96,7 +94,7 @@ fn is_system_tool(app: &ApplicationInfo, exclusion_paths: &[String]) -> bool {
             return true;
         }
     }
-    
+
     false
 }
 const UNINSTALL_SUBKEYS: &[&str] = &[
@@ -216,8 +214,11 @@ fn shortcut_to_application(path: &Path) -> Option<ApplicationInfo> {
     let description = shortcut
         .description
         .filter(|value| !value.trim().is_empty());
-    let pinyin_index =
-        build_pinyin_index([Some(name.as_str()), description.as_deref()].into_iter().flatten());
+    let pinyin_index = build_pinyin_index(
+        [Some(name.as_str()), description.as_deref()]
+            .into_iter()
+            .flatten(),
+    );
     let path_string = path.to_string_lossy().into_owned();
     let working_directory = shortcut.working_directory.and_then(|value| {
         let trimmed = value.trim();
@@ -290,7 +291,11 @@ fn internet_shortcut_to_application(path: &Path) -> Option<ApplicationInfo> {
     let description = shortcut
         .description
         .filter(|value| !value.trim().is_empty());
-    let pinyin_index = build_pinyin_index([Some(name.as_str()), description.as_deref()].into_iter().flatten());
+    let pinyin_index = build_pinyin_index(
+        [Some(name.as_str()), description.as_deref()]
+            .into_iter()
+            .flatten(),
+    );
 
     Some(ApplicationInfo {
         id: format!("win32:url:{}", path_string.to_lowercase()),
@@ -435,8 +440,11 @@ fn registry_entry_to_app(
     keywords.retain(|value| !value.trim().is_empty());
     keywords.sort();
     keywords.dedup();
-    let pinyin_index =
-        build_pinyin_index([Some(display_name.as_str()), description.as_deref()].into_iter().flatten());
+    let pinyin_index = build_pinyin_index(
+        [Some(display_name.as_str()), description.as_deref()]
+            .into_iter()
+            .flatten(),
+    );
 
     Some(ApplicationInfo {
         id: format!("win32:installed:{}:{}", parent_path, entry_name).to_lowercase(),
@@ -573,9 +581,7 @@ fn current_user_sid_hstring() -> WinResult<HSTRING> {
         let mut sid_ptr = PWSTR::null();
         ConvertSidToStringSidW(sid, &mut sid_ptr)?;
         let _sid_guard = LocalFreeGuard(HLOCAL(sid_ptr.as_ptr().cast()));
-        let sid_string = sid_ptr
-            .to_string()
-            .map_err(|_| WinError::from_win32())?;
+        let sid_string = sid_ptr.to_string().map_err(|_| WinError::from_win32())?;
 
         Ok(HSTRING::from(sid_string))
     }
@@ -636,7 +642,9 @@ async fn enumerate_uwp_apps() -> WinResult<Vec<ApplicationInfo>> {
             keywords.sort();
             keywords.dedup();
             let pinyin_index = build_pinyin_index(
-                [Some(display_name.as_str()), description.as_deref()].into_iter().flatten(),
+                [Some(display_name.as_str()), description.as_deref()]
+                    .into_iter()
+                    .flatten(),
             );
 
             applications.push(ApplicationInfo {
@@ -656,4 +664,3 @@ async fn enumerate_uwp_apps() -> WinResult<Vec<ApplicationInfo>> {
 
     Ok(applications)
 }
-

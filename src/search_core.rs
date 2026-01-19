@@ -69,9 +69,7 @@ pub fn search(
     let query_mode = QueryMode::from_option(mode);
     let include_apps = config.enable_app_results;
     let include_bookmarks = config.enable_bookmark_results;
-    let mut result_limit = config
-        .max_results
-        .clamp(MIN_RESULT_LIMIT, MAX_RESULT_LIMIT) as usize;
+    let mut result_limit = config.max_results.clamp(MIN_RESULT_LIMIT, MAX_RESULT_LIMIT) as usize;
     if result_limit == 0 {
         result_limit = MIN_RESULT_LIMIT as usize;
     }
@@ -83,13 +81,13 @@ pub fn search(
     if is_url_like(trimmed) {
         let result_id = format!("url-{counter}");
         pending_actions.insert(result_id.clone(), PendingAction::Url(trimmed.to_string()));
-                results.push(SearchResult {
-                    id: result_id,
-                    title: format!("打开网址: {trimmed}"),
-                    subtitle: trimmed.to_string(),
-                    score: 200,
-                    action_id: "url".to_string(),
-                });
+        results.push(SearchResult {
+            id: result_id,
+            title: format!("打开网址: {trimmed}"),
+            subtitle: trimmed.to_string(),
+            score: 200,
+            action_id: "url".to_string(),
+        });
         counter += 1;
     }
 
@@ -130,7 +128,8 @@ pub fn search(
                     None => format!("收藏夹 · {}", bookmark.url),
                 };
                 let result_id = format!("bookmark-{}", bookmark.id);
-                pending_actions.insert(result_id.clone(), PendingAction::Bookmark(bookmark.clone()));
+                pending_actions
+                    .insert(result_id.clone(), PendingAction::Bookmark(bookmark.clone()));
                 results.push(SearchResult {
                     id: result_id,
                     title: bookmark.title.clone(),
@@ -240,7 +239,11 @@ fn split_pinyin_entry(entry: &str) -> (Option<&str>, Option<&str>) {
     if let Some((full, initials)) = entry.split_once('|') {
         (
             if full.is_empty() { None } else { Some(full) },
-            if initials.is_empty() { None } else { Some(initials) },
+            if initials.is_empty() {
+                None
+            } else {
+                Some(initials)
+            },
         )
     } else if entry.is_empty() {
         (None, None)

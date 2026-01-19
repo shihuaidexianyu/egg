@@ -131,8 +131,8 @@ fn chrome_executable_path() -> Option<PathBuf> {
         RegKey::predef(HKEY_CURRENT_USER),
     ];
     for root in roots {
-        if let Ok(key) = root
-            .open_subkey(r"SOFTWARE\Microsoft\Windows\CurrentVersion\App Paths\chrome.exe")
+        if let Ok(key) =
+            root.open_subkey(r"SOFTWARE\Microsoft\Windows\CurrentVersion\App Paths\chrome.exe")
         {
             if let Ok(path) = key.get_value::<String, _>("") {
                 let trimmed = path.trim().trim_matches('"');

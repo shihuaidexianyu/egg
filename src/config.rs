@@ -102,7 +102,6 @@ const fn default_debug_mode() -> bool {
     false
 }
 
-
 impl AppConfig {
     pub fn load() -> Self {
         let Some(path) = config_path() else {
