@@ -27,7 +27,7 @@ use log::{debug, info, warn};
 use ratatui::{
     backend::CrosstermBackend,
     prelude::*,
-    widgets::{Block, Borders, List, ListItem, ListState, Paragraph},
+    widgets::{Block, BorderType, Borders, List, ListItem, ListState, Padding, Paragraph, Wrap},
 };
 
 use crate::{
@@ -442,24 +442,158 @@ fn char_to_byte_index(input: &str, char_index: usize) -> usize {
         .unwrap_or_else(|| input.len())
 }
 
+#[derive(Clone, Copy)]
+struct Theme {
+    background: Color,
+    surface: Color,
+    border: Color,
+    accent: Color,
+    text: Color,
+    dim: Color,
+    highlight_bg: Color,
+    highlight_fg: Color,
+}
+
+impl Theme {
+    fn new() -> Self {
+        Self {
+            background: Color::Rgb(18, 20, 23),
+            surface: Color::Rgb(28, 31, 36),
+            border: Color::Rgb(58, 62, 70),
+            accent: Color::Rgb(242, 193, 78),
+            text: Color::Rgb(232, 230, 227),
+            dim: Color::Rgb(148, 153, 160),
+            highlight_bg: Color::Rgb(45, 93, 124),
+            highlight_fg: Color::Rgb(250, 250, 250),
+        }
+    }
+}
+
 fn render_ui(frame: &mut Frame, ui_state: &mut TuiState) {
+    let theme = Theme::new();
+    let area = frame.size();
+    frame.render_widget(
+        Block::default().style(Style::default().bg(theme.background)),
+        area,
+    );
+
     let layout = Layout::default()
         .direction(Direction::Vertical)
-        .constraints([Constraint::Length(3), Constraint::Min(1)])
-        .split(frame.size());
+        .constraints([
+            Constraint::Length(1),
+            Constraint::Length(3),
+            Constraint::Min(1),
+            Constraint::Length(1),
+        ])
+        .split(area);
 
-    let input_area = layout[0];
-    let list_area = layout[1];
+    let header_area = layout[0];
+    let input_area = layout[1];
+    let list_area = layout[2];
+    let footer_area = layout[3];
 
-    let input_width = input_area.width.saturating_sub(2) as usize;
+    render_header(frame, header_area, ui_state, theme);
+    render_input(frame, input_area, ui_state, theme);
+    render_results(frame, list_area, ui_state, theme);
+    render_footer(frame, footer_area, theme);
+}
+
+fn render_header(frame: &mut Frame, area: Rect, ui_state: &TuiState, theme: Theme) {
+    let layout = Layout::default()
+        .direction(Direction::Horizontal)
+        .constraints([Constraint::Percentage(65), Constraint::Percentage(35)])
+        .split(area);
+
+    let left = Line::from(vec![
+        Span::styled(
+            "egg",
+            Style::default()
+                .fg(theme.accent)
+                .add_modifier(Modifier::BOLD),
+        ),
+        Span::styled("  launcher", Style::default().fg(theme.dim)),
+    ]);
+    let left_widget = Paragraph::new(left).style(Style::default().bg(theme.background));
+    frame.render_widget(left_widget, layout[0]);
+
+    let label = if ui_state.input.trim().is_empty() {
+        "recent"
+    } else {
+        "results"
+    };
+    let right = Paragraph::new(Line::from(Span::styled(
+        format!("{label}: {}", ui_state.results.len()),
+        Style::default().fg(theme.dim),
+    )))
+    .alignment(Alignment::Right)
+    .style(Style::default().bg(theme.background));
+    frame.render_widget(right, layout[1]);
+}
+
+fn render_input(frame: &mut Frame, area: Rect, ui_state: &mut TuiState, theme: Theme) {
+    let input_padding = 1u16;
+    let input_width = area
+        .width
+        .saturating_sub(2 + input_padding.saturating_mul(2)) as usize;
     let (visible_input, cursor_x) = slice_input(&ui_state.input, ui_state.cursor, input_width);
-    let input = Paragraph::new(visible_input).block(
-        Block::default()
-            .borders(Borders::ALL)
-            .border_style(Style::default().fg(Color::Yellow))
-            .title("Search"),
-    );
-    frame.render_widget(input, input_area);
+    let input_span = if ui_state.input.is_empty() {
+        Span::styled("Type to search...", Style::default().fg(theme.dim))
+    } else {
+        Span::styled(visible_input, Style::default().fg(theme.text))
+    };
+
+    let input = Paragraph::new(Line::from(input_span))
+        .style(Style::default().bg(theme.surface))
+        .block(
+            Block::default()
+                .borders(Borders::ALL)
+                .border_type(BorderType::Rounded)
+                .border_style(Style::default().fg(theme.accent))
+                .style(Style::default().bg(theme.surface))
+                .padding(Padding::horizontal(input_padding))
+                .title(Span::styled(
+                    " Search ",
+                    Style::default()
+                        .fg(theme.accent)
+                        .add_modifier(Modifier::BOLD),
+                )),
+        );
+    frame.render_widget(input, area);
+
+    let cursor_x = area.x + 1 + input_padding + cursor_x as u16;
+    let cursor_y = area.y + 1;
+    let max_cursor_x = area.x + area.width.saturating_sub(1 + input_padding);
+    if cursor_x < max_cursor_x && area.height > 2 {
+        frame.set_cursor(cursor_x, cursor_y);
+    }
+}
+
+fn render_results(frame: &mut Frame, area: Rect, ui_state: &mut TuiState, theme: Theme) {
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .border_type(BorderType::Rounded)
+        .border_style(Style::default().fg(theme.border))
+        .style(Style::default().bg(theme.surface))
+        .title(Span::styled(
+            " Results ",
+            Style::default()
+                .fg(theme.text)
+                .add_modifier(Modifier::BOLD),
+        ));
+
+    if ui_state.results.is_empty() {
+        let message = if ui_state.input.trim().is_empty() {
+            "No recent items. Type to search."
+        } else {
+            "No results. Try another query."
+        };
+        let empty = Paragraph::new(message)
+            .style(Style::default().fg(theme.dim).bg(theme.surface))
+            .alignment(Alignment::Center)
+            .block(block);
+        frame.render_widget(empty, area);
+        return;
+    }
 
     let items: Vec<ListItem> = ui_state
         .results
@@ -467,27 +601,50 @@ fn render_ui(frame: &mut Frame, ui_state: &mut TuiState) {
         .map(|result| {
             let title = Line::from(Span::styled(
                 result.title.clone(),
-                Style::default().add_modifier(Modifier::BOLD),
+                Style::default()
+                    .fg(theme.text)
+                    .add_modifier(Modifier::BOLD),
             ));
             let subtitle = Line::from(Span::styled(
                 result.subtitle.clone(),
-                Style::default().fg(Color::DarkGray),
+                Style::default().fg(theme.dim),
             ));
             ListItem::new(vec![title, subtitle])
         })
         .collect();
 
     let list = List::new(items)
-        .block(Block::default().borders(Borders::ALL).title("Results"))
-        .highlight_style(Style::default().fg(Color::White).bg(Color::Blue))
+        .block(block)
+        .highlight_style(
+            Style::default()
+                .fg(theme.highlight_fg)
+                .bg(theme.highlight_bg)
+                .add_modifier(Modifier::BOLD),
+        )
         .highlight_symbol("> ");
-    frame.render_stateful_widget(list, list_area, &mut ui_state.list_state);
+    frame.render_stateful_widget(list, area, &mut ui_state.list_state);
+}
 
-    let cursor_x = input_area.x + 1 + cursor_x as u16;
-    let cursor_y = input_area.y + 1;
-    if cursor_x < input_area.x + input_area.width.saturating_sub(1) && input_area.height > 2 {
-        frame.set_cursor(cursor_x, cursor_y);
-    }
+fn render_footer(frame: &mut Frame, area: Rect, theme: Theme) {
+    let key_style = Style::default()
+        .fg(theme.accent)
+        .add_modifier(Modifier::BOLD);
+    let hint_style = Style::default().fg(theme.dim);
+    let footer = Line::from(vec![
+        Span::styled("Enter", key_style),
+        Span::styled(": run  ", hint_style),
+        Span::styled("Esc", key_style),
+        Span::styled(": quit  ", hint_style),
+        Span::styled("Ctrl+N/P", key_style),
+        Span::styled(": move  ", hint_style),
+        Span::styled("Ctrl+W", key_style),
+        Span::styled(": delete word", hint_style),
+    ]);
+    let footer_widget = Paragraph::new(footer)
+        .wrap(Wrap { trim: true })
+        .alignment(Alignment::Center)
+        .style(Style::default().bg(theme.background));
+    frame.render_widget(footer_widget, area);
 }
 
 fn slice_input(input: &str, cursor: usize, width: usize) -> (String, usize) {
