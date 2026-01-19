@@ -10,8 +10,6 @@ use crate::{
     state::PendingAction,
 };
 
-const MIN_QUERY_DELAY_MS: u64 = 50;
-const MAX_QUERY_DELAY_MS: u64 = 2000;
 const MIN_RESULT_LIMIT: u32 = 10;
 const MAX_RESULT_LIMIT: u32 = 60;
 

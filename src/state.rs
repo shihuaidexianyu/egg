@@ -22,7 +22,6 @@ pub struct AppState {
     pub app_index: Arc<Mutex<Vec<ApplicationInfo>>>,
     pub bookmark_index: Arc<Mutex<Vec<BookmarkEntry>>>,
     pub config: Arc<Mutex<AppConfig>>,
-    pub pending_actions: Arc<Mutex<HashMap<String, PendingAction>>>,
     pub search_cache: Arc<Mutex<SearchCache>>,
     pub recent_actions: Arc<Mutex<RecentList>>,
 }
@@ -33,7 +32,6 @@ impl AppState {
             app_index: Arc::new(Mutex::new(Vec::new())),
             bookmark_index: Arc::new(Mutex::new(Vec::new())),
             config: Arc::new(Mutex::new(AppConfig::default())),
-            pending_actions: Arc::new(Mutex::new(HashMap::new())),
             search_cache: Arc::new(Mutex::new(SearchCache::new(8))),
             recent_actions: Arc::new(Mutex::new(RecentList::new(12))),
         }

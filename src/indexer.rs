@@ -180,7 +180,7 @@ fn shortcut_to_application(path: &Path) -> Option<ApplicationInfo> {
     let resolved_target = shortcut
         .target_path
         .as_deref()
-        .and_then(|raw| sanitize_executable_path(raw));
+        .and_then(sanitize_executable_path);
     let display_target = resolved_target
         .clone()
         .or_else(|| shortcut.target_path.clone())

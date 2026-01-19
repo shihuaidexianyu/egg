@@ -260,6 +260,7 @@ fn decode_utf16(data: &[u8], little_endian: bool) -> String {
 
 
 /// Switches the current keyboard layout to English (US) so the search框默认使用英文输入法。
+#[allow(dead_code)]
 pub(crate) fn switch_to_english_input_method() {
     #[cfg(target_os = "windows")]
     unsafe {
@@ -301,6 +302,7 @@ pub(crate) fn switch_to_english_input_method() {
 }
 
 /// Gets the current input method (keyboard layout) for the current thread.
+#[allow(dead_code)]
 pub(crate) fn get_current_input_method() -> Option<isize> {
     #[cfg(target_os = "windows")]
     unsafe {
@@ -321,6 +323,7 @@ pub(crate) fn get_current_input_method() -> Option<isize> {
 }
 
 /// Restores a previously saved input method.
+#[allow(dead_code)]
 pub(crate) fn restore_input_method(layout_id: isize) {
     #[cfg(target_os = "windows")]
     unsafe {
@@ -337,6 +340,7 @@ pub(crate) fn restore_input_method(layout_id: isize) {
 }
 
 /// Enables or disables Windows auto-start via the "Run" registry key.
+#[allow(dead_code)]
 pub(crate) fn configure_launch_on_startup(enable: bool) -> std::result::Result<(), String> {
     #[cfg(target_os = "windows")]
     {

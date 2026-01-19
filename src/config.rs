@@ -119,6 +119,7 @@ impl AppConfig {
         }
     }
 
+    #[allow(dead_code)]
     pub fn save(&self) -> Result<(), String> {
         let Some(path) = config_path() else {
             return Err("无法确定配置目录".into());
