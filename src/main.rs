@@ -19,7 +19,7 @@ use std::{
 use anyhow::Result;
 use crossterm::{
     cursor,
-    event::{self, Event, KeyCode, KeyEvent, KeyModifiers},
+    event::{self, Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers},
     execute,
     terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
 };
@@ -220,6 +220,10 @@ fn run_tui(state: Arc<AppState>) -> Result<Option<(SearchResult, PendingAction)>
 }
 
 fn handle_key_event(key: KeyEvent, ui_state: &mut TuiState, app_state: &AppState) {
+    if key.kind == KeyEventKind::Release {
+        return;
+    }
+
     if key.modifiers.contains(KeyModifiers::CONTROL) {
         match key.code {
             KeyCode::Char('c') => {
