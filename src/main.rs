@@ -37,6 +37,7 @@ use crate::{
     models::SearchResult,
     search_core as core,
     state::{AppState, CachedSearch, PendingAction, RecentEntry},
+    windows_utils::configure_launch_on_startup,
 };
 
 #[tokio::main]
@@ -161,6 +162,126 @@ impl Drop for TerminalRestore {
     }
 }
 
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum ViewMode {
+    Search,
+    Settings,
+}
+
+impl ViewMode {
+    fn label(self) -> &'static str {
+        match self {
+            ViewMode::Search => "search",
+            ViewMode::Settings => "settings",
+        }
+    }
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum SettingKind {
+    Toggle,
+    Number { min: u32, max: u32 },
+    Text,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum SettingId {
+    GlobalHotkey,
+    QueryDelayMs,
+    MaxResults,
+    EnableAppResults,
+    EnableBookmarkResults,
+    ForceEnglishInput,
+    DebugMode,
+    LaunchOnStartup,
+}
+
+#[derive(Clone, Copy)]
+struct SettingItem {
+    id: SettingId,
+    label: &'static str,
+    description: &'static str,
+    kind: SettingKind,
+}
+
+const SETTINGS: &[SettingItem] = &[
+    SettingItem {
+        id: SettingId::GlobalHotkey,
+        label: "Global Hotkey",
+        description: "Hotkey to toggle the launcher.",
+        kind: SettingKind::Text,
+    },
+    SettingItem {
+        id: SettingId::QueryDelayMs,
+        label: "Query Delay (ms)",
+        description: "Delay before search triggers (ms).",
+        kind: SettingKind::Number { min: 0, max: 2000 },
+    },
+    SettingItem {
+        id: SettingId::MaxResults,
+        label: "Max Results",
+        description: "Maximum results returned per query.",
+        kind: SettingKind::Number { min: 10, max: 60 },
+    },
+    SettingItem {
+        id: SettingId::EnableAppResults,
+        label: "App Results",
+        description: "Include installed applications in search.",
+        kind: SettingKind::Toggle,
+    },
+    SettingItem {
+        id: SettingId::EnableBookmarkResults,
+        label: "Bookmark Results",
+        description: "Include browser bookmarks in search.",
+        kind: SettingKind::Toggle,
+    },
+    SettingItem {
+        id: SettingId::ForceEnglishInput,
+        label: "Force English Input",
+        description: "Try to switch IME to English when active.",
+        kind: SettingKind::Toggle,
+    },
+    SettingItem {
+        id: SettingId::DebugMode,
+        label: "Debug Mode",
+        description: "Enable verbose logging.",
+        kind: SettingKind::Toggle,
+    },
+    SettingItem {
+        id: SettingId::LaunchOnStartup,
+        label: "Launch on Startup",
+        description: "Start egg automatically on login.",
+        kind: SettingKind::Toggle,
+    },
+];
+
+struct EditState {
+    id: SettingId,
+    buffer: String,
+}
+
+struct SettingsState {
+    selected: usize,
+    list_state: ListState,
+    editing: Option<EditState>,
+    status: Option<String>,
+}
+
+impl SettingsState {
+    fn new() -> Self {
+        let mut list_state = ListState::default();
+        if !SETTINGS.is_empty() {
+            list_state.select(Some(0));
+        }
+        Self {
+            selected: 0,
+            list_state,
+            editing: None,
+            status: None,
+        }
+    }
+}
+
 struct TuiState {
     input: String,
     cursor: usize,
@@ -170,6 +291,8 @@ struct TuiState {
     should_quit: bool,
     pending_action: Option<PendingAction>,
     pending_result: Option<SearchResult>,
+    view_mode: ViewMode,
+    settings: SettingsState,
 }
 
 impl TuiState {
@@ -183,6 +306,8 @@ impl TuiState {
             should_quit: false,
             pending_action: None,
             pending_result: None,
+            view_mode: ViewMode::Search,
+            settings: SettingsState::new(),
         }
     }
 }
@@ -199,7 +324,7 @@ fn run_tui(state: Arc<AppState>) -> Result<Option<(SearchResult, PendingAction)>
     refresh_results(&mut ui_state, &state);
 
     loop {
-        terminal.draw(|frame| render_ui(frame, &mut ui_state))?;
+        terminal.draw(|frame| render_ui(frame, &mut ui_state, &state))?;
 
         if ui_state.should_quit {
             break;
@@ -224,6 +349,25 @@ fn handle_key_event(key: KeyEvent, ui_state: &mut TuiState, app_state: &AppState
         return;
     }
 
+    match ui_state.view_mode {
+        ViewMode::Search => handle_search_key_event(key, ui_state, app_state),
+        ViewMode::Settings => handle_settings_key_event(key, ui_state, app_state),
+    }
+}
+
+fn handle_search_key_event(key: KeyEvent, ui_state: &mut TuiState, app_state: &AppState) {
+    if matches!(key.code, KeyCode::Left | KeyCode::Right) {
+        if ui_state.input.trim().is_empty() {
+            ui_state.view_mode = ViewMode::Settings;
+            ui_state.settings.status = None;
+        } else if key.code == KeyCode::Left {
+            move_cursor(ui_state, -1);
+        } else {
+            move_cursor(ui_state, 1);
+        }
+        return;
+    }
+
     if key.modifiers.contains(KeyModifiers::CONTROL) {
         match key.code {
             KeyCode::Char('c') => {
@@ -235,6 +379,8 @@ fn handle_key_event(key: KeyEvent, ui_state: &mut TuiState, app_state: &AppState
                 delete_prev_word(ui_state);
                 refresh_results(ui_state, app_state);
             }
+            KeyCode::Left => move_cursor(ui_state, -1),
+            KeyCode::Right => move_cursor(ui_state, 1),
             _ => {}
         }
         return;
@@ -255,11 +401,11 @@ fn handle_key_event(key: KeyEvent, ui_state: &mut TuiState, app_state: &AppState
         }
         KeyCode::Up => move_selection(ui_state, -1),
         KeyCode::Down => move_selection(ui_state, 1),
-        KeyCode::Left => move_cursor(ui_state, -1),
-        KeyCode::Right => move_cursor(ui_state, 1),
-        KeyCode::Home => ui_state.cursor = 0,
-        KeyCode::End => ui_state.cursor = ui_state.input.chars().count(),
-        KeyCode::Backspace => {
+            KeyCode::Left => {}
+            KeyCode::Right => {}
+            KeyCode::Home => ui_state.cursor = 0,
+            KeyCode::End => ui_state.cursor = ui_state.input.chars().count(),
+            KeyCode::Backspace => {
             if delete_char_before_cursor(ui_state) {
                 refresh_results(ui_state, app_state);
             }
@@ -275,6 +421,49 @@ fn handle_key_event(key: KeyEvent, ui_state: &mut TuiState, app_state: &AppState
                 refresh_results(ui_state, app_state);
             }
         }
+        _ => {}
+    }
+}
+
+fn handle_settings_key_event(key: KeyEvent, ui_state: &mut TuiState, app_state: &AppState) {
+    if matches!(key.code, KeyCode::Left | KeyCode::Right) {
+        ui_state.view_mode = ViewMode::Search;
+        ui_state.settings.status = None;
+        return;
+    }
+
+    if ui_state.settings.editing.is_some() {
+        let mut editing = ui_state.settings.editing.take().unwrap();
+        let mut keep_editing = true;
+        match key.code {
+            KeyCode::Esc => {
+                keep_editing = false;
+            }
+            KeyCode::Enter => {
+                commit_setting_edit(&editing, ui_state, app_state);
+                keep_editing = false;
+            }
+            KeyCode::Backspace => {
+                editing.buffer.pop();
+            }
+            KeyCode::Char(ch) => {
+                if is_input_allowed(editing.id, ch) {
+                    editing.buffer.push(ch);
+                }
+            }
+            _ => {}
+        }
+        if keep_editing {
+            ui_state.settings.editing = Some(editing);
+        }
+        return;
+    }
+
+    match key.code {
+        KeyCode::Up => move_settings_selection(&mut ui_state.settings, -1),
+        KeyCode::Down => move_settings_selection(&mut ui_state.settings, 1),
+        KeyCode::Char(' ') => toggle_setting(ui_state, app_state),
+        KeyCode::Enter => start_setting_edit(ui_state, app_state),
         _ => {}
     }
 }
@@ -469,7 +658,7 @@ impl Theme {
     }
 }
 
-fn render_ui(frame: &mut Frame, ui_state: &mut TuiState) {
+fn render_ui(frame: &mut Frame, ui_state: &mut TuiState, app_state: &AppState) {
     let theme = Theme::new();
     let area = frame.size();
     frame.render_widget(
@@ -477,25 +666,43 @@ fn render_ui(frame: &mut Frame, ui_state: &mut TuiState) {
         area,
     );
 
-    let layout = Layout::default()
-        .direction(Direction::Vertical)
-        .constraints([
-            Constraint::Length(1),
-            Constraint::Length(3),
-            Constraint::Min(1),
-            Constraint::Length(1),
-        ])
-        .split(area);
+    match ui_state.view_mode {
+        ViewMode::Search => {
+            let layout = Layout::default()
+                .direction(Direction::Vertical)
+                .constraints([
+                    Constraint::Length(1),
+                    Constraint::Length(3),
+                    Constraint::Min(1),
+                    Constraint::Length(1),
+                ])
+                .split(area);
 
-    let header_area = layout[0];
-    let input_area = layout[1];
-    let list_area = layout[2];
-    let footer_area = layout[3];
+            let header_area = layout[0];
+            let input_area = layout[1];
+            let list_area = layout[2];
+            let footer_area = layout[3];
 
-    render_header(frame, header_area, ui_state, theme);
-    render_input(frame, input_area, ui_state, theme);
-    render_results(frame, list_area, ui_state, theme);
-    render_footer(frame, footer_area, theme);
+            render_header(frame, header_area, ui_state, theme);
+            render_input(frame, input_area, ui_state, theme);
+            render_results(frame, list_area, ui_state, theme);
+            render_footer(frame, footer_area, ui_state, theme);
+        }
+        ViewMode::Settings => {
+            let layout = Layout::default()
+                .direction(Direction::Vertical)
+                .constraints([Constraint::Length(1), Constraint::Min(1), Constraint::Length(1)])
+                .split(area);
+
+            let header_area = layout[0];
+            let body_area = layout[1];
+            let footer_area = layout[2];
+
+            render_header(frame, header_area, ui_state, theme);
+            render_settings(frame, body_area, ui_state, app_state, theme);
+            render_footer(frame, footer_area, ui_state, theme);
+        }
+    }
 }
 
 fn render_header(frame: &mut Frame, area: Rect, ui_state: &TuiState, theme: Theme) {
@@ -511,18 +718,26 @@ fn render_header(frame: &mut Frame, area: Rect, ui_state: &TuiState, theme: Them
                 .fg(theme.accent)
                 .add_modifier(Modifier::BOLD),
         ),
-        Span::styled("  launcher", Style::default().fg(theme.dim)),
+        Span::styled(
+            format!("  {}", ui_state.view_mode.label()),
+            Style::default().fg(theme.dim),
+        ),
     ]);
     let left_widget = Paragraph::new(left).style(Style::default().bg(theme.background));
     frame.render_widget(left_widget, layout[0]);
 
-    let label = if ui_state.input.trim().is_empty() {
-        "recent"
+    let right_text = if ui_state.view_mode == ViewMode::Settings {
+        "settings".to_string()
     } else {
-        "results"
+        let label = if ui_state.input.trim().is_empty() {
+            "recent"
+        } else {
+            "results"
+        };
+        format!("{label}: {}", ui_state.results.len())
     };
     let right = Paragraph::new(Line::from(Span::styled(
-        format!("{label}: {}", ui_state.results.len()),
+        right_text,
         Style::default().fg(theme.dim),
     )))
     .alignment(Alignment::Right)
@@ -625,26 +840,324 @@ fn render_results(frame: &mut Frame, area: Rect, ui_state: &mut TuiState, theme:
     frame.render_stateful_widget(list, area, &mut ui_state.list_state);
 }
 
-fn render_footer(frame: &mut Frame, area: Rect, theme: Theme) {
+fn render_footer(frame: &mut Frame, area: Rect, ui_state: &TuiState, theme: Theme) {
     let key_style = Style::default()
         .fg(theme.accent)
         .add_modifier(Modifier::BOLD);
     let hint_style = Style::default().fg(theme.dim);
-    let footer = Line::from(vec![
-        Span::styled("Enter", key_style),
-        Span::styled(": run  ", hint_style),
-        Span::styled("Esc", key_style),
-        Span::styled(": quit  ", hint_style),
-        Span::styled("Ctrl+N/P", key_style),
-        Span::styled(": move  ", hint_style),
-        Span::styled("Ctrl+W", key_style),
-        Span::styled(": delete word", hint_style),
-    ]);
+    let footer = if ui_state.view_mode == ViewMode::Search {
+        Line::from(vec![
+            Span::styled("Enter", key_style),
+            Span::styled(": run  ", hint_style),
+            Span::styled("Esc", key_style),
+            Span::styled(": quit  ", hint_style),
+            Span::styled("Ctrl+N/P", key_style),
+            Span::styled(": move  ", hint_style),
+            Span::styled("Ctrl+W", key_style),
+            Span::styled(": delete  ", hint_style),
+            Span::styled("←/→", key_style),
+            Span::styled(": settings", hint_style),
+        ])
+    } else if ui_state.settings.editing.is_some() {
+        Line::from(vec![
+            Span::styled("Enter", key_style),
+            Span::styled(": apply  ", hint_style),
+            Span::styled("Esc", key_style),
+            Span::styled(": cancel  ", hint_style),
+            Span::styled("←/→", key_style),
+            Span::styled(": search", hint_style),
+        ])
+    } else {
+        Line::from(vec![
+            Span::styled("Enter", key_style),
+            Span::styled(": edit  ", hint_style),
+            Span::styled("Space", key_style),
+            Span::styled(": toggle  ", hint_style),
+            Span::styled("↑/↓", key_style),
+            Span::styled(": move  ", hint_style),
+            Span::styled("←/→", key_style),
+            Span::styled(": search", hint_style),
+        ])
+    };
     let footer_widget = Paragraph::new(footer)
         .wrap(Wrap { trim: true })
         .alignment(Alignment::Center)
         .style(Style::default().bg(theme.background));
     frame.render_widget(footer_widget, area);
+}
+
+fn render_settings(
+    frame: &mut Frame,
+    area: Rect,
+    ui_state: &mut TuiState,
+    app_state: &AppState,
+    theme: Theme,
+) {
+    let config = app_state.config.lock().unwrap().clone();
+    let layout = Layout::default()
+        .direction(Direction::Horizontal)
+        .constraints([Constraint::Percentage(45), Constraint::Percentage(55)])
+        .split(area);
+
+    let list_items: Vec<ListItem> = SETTINGS
+        .iter()
+        .map(|item| {
+            let value = setting_value(&config, item.id);
+            let is_editing = ui_state
+                .settings
+                .editing
+                .as_ref()
+                .is_some_and(|edit| edit.id == item.id);
+            let value_style = if is_editing {
+                Style::default().fg(theme.accent).add_modifier(Modifier::BOLD)
+            } else {
+                Style::default().fg(theme.dim)
+            };
+            let title = Line::from(Span::styled(
+                item.label,
+                Style::default().fg(theme.text).add_modifier(Modifier::BOLD),
+            ));
+            let value = Line::from(Span::styled(value, value_style));
+            ListItem::new(vec![title, value])
+        })
+        .collect();
+
+    let list_block = Block::default()
+        .borders(Borders::ALL)
+        .border_type(BorderType::Rounded)
+        .border_style(Style::default().fg(theme.border))
+        .style(Style::default().bg(theme.surface))
+        .title(Span::styled(
+            " Settings ",
+            Style::default()
+                .fg(theme.text)
+                .add_modifier(Modifier::BOLD),
+        ));
+    let list = List::new(list_items)
+        .block(list_block)
+        .highlight_style(
+            Style::default()
+                .fg(theme.highlight_fg)
+                .bg(theme.highlight_bg)
+                .add_modifier(Modifier::BOLD),
+        )
+        .highlight_symbol("> ");
+    frame.render_stateful_widget(list, layout[0], &mut ui_state.settings.list_state);
+
+    let current = SETTINGS
+        .get(ui_state.settings.selected)
+        .unwrap_or(&SETTINGS[0]);
+    let mut detail_lines = vec![
+        Line::from(Span::styled(
+            current.label,
+            Style::default()
+                .fg(theme.text)
+                .add_modifier(Modifier::BOLD),
+        )),
+        Line::from(Span::styled(
+            current.description,
+            Style::default().fg(theme.dim),
+        )),
+        Line::from(Span::raw("")),
+        Line::from(Span::styled(
+            format!("Current: {}", setting_value(&config, current.id)),
+            Style::default().fg(theme.text),
+        )),
+    ];
+
+    if let Some(editing) = ui_state.settings.editing.as_ref() {
+        if editing.id == current.id {
+            detail_lines.push(Line::from(Span::raw("")));
+            detail_lines.push(Line::from(Span::styled(
+                format!("Editing: {}", editing.buffer),
+                Style::default().fg(theme.accent),
+            )));
+        }
+    }
+
+    if let Some(status) = ui_state.settings.status.as_ref() {
+        detail_lines.push(Line::from(Span::raw("")));
+        detail_lines.push(Line::from(Span::styled(
+            status.clone(),
+            Style::default().fg(theme.dim),
+        )));
+    }
+
+    let detail = Paragraph::new(detail_lines)
+        .wrap(Wrap { trim: true })
+        .block(
+            Block::default()
+                .borders(Borders::ALL)
+                .border_type(BorderType::Rounded)
+                .border_style(Style::default().fg(theme.border))
+                .style(Style::default().bg(theme.surface))
+                .title(Span::styled(
+                    " Details ",
+                    Style::default()
+                        .fg(theme.text)
+                        .add_modifier(Modifier::BOLD),
+                )),
+        )
+        .style(Style::default().bg(theme.surface));
+    frame.render_widget(detail, layout[1]);
+}
+
+fn move_settings_selection(settings: &mut SettingsState, delta: isize) {
+    let len = SETTINGS.len();
+    if len == 0 {
+        settings.selected = 0;
+        settings.list_state.select(None);
+        return;
+    }
+    let current = settings.selected;
+    let next = if delta < 0 {
+        if current == 0 {
+            len - 1
+        } else {
+            current - 1
+        }
+    } else if current + 1 >= len {
+        0
+    } else {
+        current + 1
+    };
+    settings.selected = next;
+    settings.list_state.select(Some(next));
+}
+
+fn toggle_setting(ui_state: &mut TuiState, app_state: &AppState) {
+    let Some(item) = SETTINGS.get(ui_state.settings.selected) else {
+        return;
+    };
+    if item.kind != SettingKind::Toggle {
+        return;
+    }
+
+    let mut new_launch_setting = None;
+    update_config(app_state, &mut ui_state.settings, |config| match item.id {
+        SettingId::EnableAppResults => config.enable_app_results = !config.enable_app_results,
+        SettingId::EnableBookmarkResults => {
+            config.enable_bookmark_results = !config.enable_bookmark_results
+        }
+        SettingId::ForceEnglishInput => config.force_english_input = !config.force_english_input,
+        SettingId::DebugMode => config.debug_mode = !config.debug_mode,
+        SettingId::LaunchOnStartup => {
+            config.launch_on_startup = !config.launch_on_startup;
+            new_launch_setting = Some(config.launch_on_startup);
+        }
+        _ => {}
+    });
+
+    if let Some(value) = new_launch_setting {
+        if let Err(err) = configure_launch_on_startup(value) {
+            ui_state.settings.status = Some(format!("Startup update failed: {err}"));
+        }
+    }
+}
+
+fn start_setting_edit(ui_state: &mut TuiState, app_state: &AppState) {
+    let Some(item) = SETTINGS.get(ui_state.settings.selected) else {
+        return;
+    };
+    match item.kind {
+        SettingKind::Number { .. } | SettingKind::Text => {
+            let config = app_state.config.lock().unwrap().clone();
+            let buffer = setting_value(&config, item.id);
+            ui_state.settings.editing = Some(EditState {
+                id: item.id,
+                buffer,
+            });
+            ui_state.settings.status = None;
+        }
+        SettingKind::Toggle => toggle_setting(ui_state, app_state),
+    }
+}
+
+fn commit_setting_edit(editing: &EditState, ui_state: &mut TuiState, app_state: &AppState) {
+    match setting_kind(editing.id) {
+        SettingKind::Number { min, max } => {
+            let value = editing.buffer.trim().parse::<u32>();
+            let Ok(value) = value else {
+                ui_state.settings.status = Some("Invalid number".to_string());
+                return;
+            };
+            let value = value.clamp(min, max);
+            update_config(app_state, &mut ui_state.settings, |config| match editing.id {
+                SettingId::QueryDelayMs => config.query_delay_ms = value as u64,
+                SettingId::MaxResults => config.max_results = value,
+                _ => {}
+            });
+        }
+        SettingKind::Text => {
+            let value = editing.buffer.trim().to_string();
+            if value.is_empty() {
+                ui_state.settings.status = Some("Value cannot be empty".to_string());
+                return;
+            }
+            update_config(app_state, &mut ui_state.settings, |config| match editing.id {
+                SettingId::GlobalHotkey => config.global_hotkey = value.clone(),
+                _ => {}
+            });
+        }
+        SettingKind::Toggle => {}
+    }
+}
+
+fn is_input_allowed(id: SettingId, ch: char) -> bool {
+    match setting_kind(id) {
+        SettingKind::Number { .. } => ch.is_ascii_digit(),
+        SettingKind::Text => !ch.is_control(),
+        SettingKind::Toggle => false,
+    }
+}
+
+fn setting_kind(id: SettingId) -> SettingKind {
+    SETTINGS
+        .iter()
+        .find(|item| item.id == id)
+        .map(|item| item.kind)
+        .unwrap_or(SettingKind::Text)
+}
+
+fn setting_value(config: &AppConfig, id: SettingId) -> String {
+    match id {
+        SettingId::GlobalHotkey => config.global_hotkey.clone(),
+        SettingId::QueryDelayMs => config.query_delay_ms.to_string(),
+        SettingId::MaxResults => config.max_results.to_string(),
+        SettingId::EnableAppResults => bool_label(config.enable_app_results),
+        SettingId::EnableBookmarkResults => bool_label(config.enable_bookmark_results),
+        SettingId::ForceEnglishInput => bool_label(config.force_english_input),
+        SettingId::DebugMode => bool_label(config.debug_mode),
+        SettingId::LaunchOnStartup => bool_label(config.launch_on_startup),
+    }
+}
+
+fn bool_label(value: bool) -> String {
+    if value {
+        "On".to_string()
+    } else {
+        "Off".to_string()
+    }
+}
+
+fn update_config(
+    app_state: &AppState,
+    settings: &mut SettingsState,
+    updater: impl FnOnce(&mut AppConfig),
+) {
+    let mut config = app_state.config.lock().unwrap();
+    updater(&mut config);
+    let save_result = config.save();
+    drop(config);
+
+    if let Ok(mut cache_guard) = app_state.search_cache.lock() {
+        cache_guard.clear();
+    }
+
+    match save_result {
+        Ok(_) => settings.status = Some("Saved".to_string()),
+        Err(err) => settings.status = Some(format!("Save failed: {err}")),
+    }
 }
 
 fn slice_input(input: &str, cursor: usize, width: usize) -> (String, usize) {
