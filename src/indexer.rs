@@ -1,93 +1,58 @@
-use std::{
-    collections::HashSet,
-    env, fs,
-    path::{Path, PathBuf},
-};
+use std::collections::HashSet;
 
-use log::{debug, error, warn};
+use log::{debug, warn};
 use windows::{
-    core::{Error as WinError, Result as WinResult, HRESULT, HSTRING, PWSTR},
-    Management::Deployment::PackageManager,
+    core::{Error as WinError, Result as WinResult, PWSTR},
     Win32::{
-        Foundation::{CloseHandle, LocalFree, HANDLE, HLOCAL},
-        Security::Authorization::ConvertSidToStringSidW,
-        Security::{GetTokenInformation, TokenUser, TOKEN_QUERY, TOKEN_USER},
-        System::Threading::{GetCurrentProcess, OpenProcessToken},
+        Foundation::{HANDLE, RPC_E_CHANGED_MODE},
+        System::{
+            Com::{CoInitializeEx, CoTaskMemFree, CoUninitialize, COINIT_MULTITHREADED},
+            SystemServices::SFGAO_HIDDEN,
+        },
+        UI::Shell::{
+            BHID_EnumItems, FOLDERID_AppsFolder, IEnumShellItems, IShellItem, SHGetKnownFolderItem,
+            KF_FLAG_DEFAULT, SIGDN, SIGDN_DESKTOPABSOLUTEPARSING, SIGDN_NORMALDISPLAY,
+        },
     },
 };
-use winreg::{enums::*, RegKey};
 
 use crate::{
     models::{AppType, ApplicationInfo},
     text_utils::build_pinyin_index,
-    windows_utils::{expand_env_vars, parse_internet_shortcut, resolve_shell_link},
 };
 
-/// Build the application index by scanning Start Menu shortcuts, installed Win32 software and UWP apps.
+/// Build the application index by enumerating the AppsFolder shell items.
 pub async fn build_index(exclusion_paths: Vec<String>) -> Vec<ApplicationInfo> {
-    let mut results = Vec::new();
-
-    let (start_menu_task, win32_task) = tokio::join!(
-        tokio::task::spawn_blocking(enumerate_start_menu_programs),
-        tokio::task::spawn_blocking(enumerate_installed_win32_apps),
-    );
-
-    let start_menu = match start_menu_task {
-        Ok(apps) => apps,
+    let shell_task = tokio::task::spawn_blocking(enumerate_shell_apps);
+    let mut results = match shell_task.await {
+        Ok(Ok(apps)) => apps,
+        Ok(Err(err)) => {
+            warn!("shell apps index failed: {err}");
+            Vec::new()
+        }
         Err(err) => {
-            warn!("start menu index task failed: {err}");
+            warn!("shell apps index task failed: {err}");
             Vec::new()
         }
     };
-    debug!("indexed {} start menu shortcuts", start_menu.len());
-    results.extend(start_menu);
+    debug!("indexed {} shell apps", results.len());
 
-    let win32 = match win32_task {
-        Ok(apps) => apps,
-        Err(err) => {
-            error!("win32 index task failed: {err}");
-            Vec::new()
-        }
-    };
-    debug!("indexed {} installed Win32 apps", win32.len());
-    results.extend(win32);
-
-    match enumerate_uwp_apps().await {
-        Ok(mut uwp_apps) => {
-            debug!("indexed {} UWP entries", uwp_apps.len());
-            results.append(&mut uwp_apps);
-        }
-        Err(err) => warn!("failed to enumerate UWP apps: {err}"),
-    }
-
-    // De-duplicate by resolved target path while keeping Start Menu preference over registry entries.
-    let mut seen: HashSet<(AppType, String, Option<String>)> = HashSet::new();
-    results.retain(|app| {
-        let key_path = app
-            .source_path
-            .as_ref()
-            .unwrap_or(&app.path)
-            .to_ascii_lowercase();
-        let argument_key = app
-            .arguments
-            .as_ref()
-            .map(|value| value.to_ascii_lowercase());
-        seen.insert((app.app_type.clone(), key_path, argument_key))
-    });
+    let mut seen: HashSet<String> = HashSet::new();
+    results.retain(|app| seen.insert(app.path.to_ascii_lowercase()));
     results.sort_by(|a, b| a.name.to_lowercase().cmp(&b.name.to_lowercase()));
 
-    // Filter out system tools based on path
     results.retain(|app| !is_system_tool(app, &exclusion_paths));
 
     results
 }
 
-/// Check if an application is a Windows system tool based on its path
 fn is_system_tool(app: &ApplicationInfo, exclusion_paths: &[String]) -> bool {
     let path_to_check = app.source_path.as_ref().unwrap_or(&app.path);
+    if !looks_like_file_path(path_to_check) {
+        return false;
+    }
     let path_lower = path_to_check.to_ascii_lowercase();
 
-    // Check if the app is in any excluded directory
     for sys_path in exclusion_paths {
         let sys_path_lower = sys_path.to_ascii_lowercase();
         if path_lower.starts_with(&sys_path_lower) {
@@ -97,570 +62,145 @@ fn is_system_tool(app: &ApplicationInfo, exclusion_paths: &[String]) -> bool {
 
     false
 }
-const UNINSTALL_SUBKEYS: &[&str] = &[
-    r"SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall",
-    r"SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall",
-];
 
-const SUPPORTED_URL_PROTOCOLS: &[&str] = &["steam://", "com.epicgames.launcher://apps/"];
-
-fn enumerate_start_menu_programs() -> Vec<ApplicationInfo> {
-    let startup_dirs = startup_directories();
-    let mut applications = Vec::new();
-
-    for root in start_menu_roots() {
-        if !root.is_dir() {
-            continue;
-        }
-
-        let mut stack = vec![root];
-        while let Some(dir) = stack.pop() {
-            let entries = match fs::read_dir(&dir) {
-                Ok(entries) => entries,
-                Err(_) => continue,
-            };
-
-            for entry in entries.flatten() {
-                let path = entry.path();
-                let Ok(file_type) = entry.file_type() else {
-                    continue;
-                };
-
-                if file_type.is_dir() {
-                    stack.push(path);
-                    continue;
-                }
-
-                if !file_type.is_file() {
-                    continue;
-                }
-
-                if startup_dirs.iter().any(|startup| path.starts_with(startup)) {
-                    continue;
-                }
-
-                let extension = path
-                    .extension()
-                    .and_then(|ext| ext.to_str())
-                    .map(|ext| ext.to_ascii_lowercase());
-
-                match extension.as_deref() {
-                    Some("lnk") => {
-                        if let Some(app) = shortcut_to_application(&path) {
-                            applications.push(app);
-                        }
-                    }
-                    Some("url") => {
-                        if let Some(app) = internet_shortcut_to_application(&path) {
-                            applications.push(app);
-                        }
-                    }
-                    _ => {}
-                }
-            }
-        }
-    }
-
-    applications
-}
-
-fn shortcut_to_application(path: &Path) -> Option<ApplicationInfo> {
-    let shortcut = resolve_shell_link(path)?;
-    let name = path
-        .file_stem()
-        .and_then(|value| value.to_str())?
-        .trim()
-        .to_string();
-    if name.is_empty() {
-        return None;
-    }
-
-    let resolved_target = shortcut
-        .target_path
-        .as_deref()
-        .and_then(sanitize_executable_path);
-    let display_target = resolved_target
-        .clone()
-        .or_else(|| shortcut.target_path.clone())
-        .map(|value| value.trim().to_string())
-        .filter(|value| !value.is_empty());
-
-    if display_target
-        .as_ref()
-        .map(|value| looks_like_uninstaller(value))
-        .unwrap_or(false)
-        || looks_like_uninstaller(&name)
-    {
-        return None;
-    }
-
-    let mut keywords = vec![name.clone()];
-    if let Some(ref target) = display_target {
-        keywords.push(target.clone());
-        if let Some(file_name) = Path::new(target)
-            .file_name()
-            .and_then(|value| value.to_str())
-        {
-            keywords.push(file_name.to_string());
-        }
-    }
-    if let Some(desc) = shortcut.description.clone() {
-        keywords.push(desc.clone());
-    }
-    keywords.retain(|value| !value.trim().is_empty());
-    keywords.sort();
-    keywords.dedup();
-
-    let description = shortcut
-        .description
-        .filter(|value| !value.trim().is_empty());
-    let pinyin_index = build_pinyin_index(
-        [Some(name.as_str()), description.as_deref()]
-            .into_iter()
-            .flatten(),
-    );
-    let path_string = path.to_string_lossy().into_owned();
-    let working_directory = shortcut.working_directory.and_then(|value| {
-        let trimmed = value.trim();
-        if trimmed.is_empty() {
-            None
-        } else {
-            Some(trimmed.to_string())
-        }
-    });
-    let arguments = shortcut.arguments.and_then(|value| {
-        let trimmed = value.trim();
-        if trimmed.is_empty() {
-            None
-        } else {
-            Some(trimmed.to_string())
-        }
-    });
-
-    Some(ApplicationInfo {
-        id: format!("win32:startmenu:{}", path_string.to_lowercase()),
-        name,
-        path: path_string,
-        source_path: display_target,
-        app_type: AppType::Win32,
-        description,
-        keywords,
-        pinyin_index,
-        working_directory,
-        arguments,
-    })
-}
-
-fn internet_shortcut_to_application(path: &Path) -> Option<ApplicationInfo> {
-    let shortcut = parse_internet_shortcut(path)?;
-    let url = shortcut.url.trim();
-    if url.is_empty() {
-        return None;
-    }
-
-    let normalized_url = url.to_string();
-    let lower_url = normalized_url.to_ascii_lowercase();
-    if !SUPPORTED_URL_PROTOCOLS
-        .iter()
-        .any(|prefix| lower_url.starts_with(prefix))
-    {
-        return None;
-    }
-
-    let name = path
-        .file_stem()
-        .and_then(|value| value.to_str())?
-        .trim()
-        .to_string();
-    if name.is_empty() {
-        return None;
-    }
-
-    let mut keywords = vec![name.clone(), normalized_url.clone()];
-    if let Some(desc) = shortcut
-        .description
-        .as_ref()
-        .map(|value| value.trim())
-        .filter(|value| !value.is_empty())
-    {
-        keywords.push(desc.to_string());
-    }
-    keywords.sort();
-    keywords.dedup();
-    let path_string = path.to_string_lossy().into_owned();
-    let description = shortcut
-        .description
-        .filter(|value| !value.trim().is_empty());
-    let pinyin_index = build_pinyin_index(
-        [Some(name.as_str()), description.as_deref()]
-            .into_iter()
-            .flatten(),
-    );
-
-    Some(ApplicationInfo {
-        id: format!("win32:url:{}", path_string.to_lowercase()),
-        name,
-        path: path_string,
-        source_path: Some(normalized_url),
-        app_type: AppType::Win32,
-        description,
-        keywords,
-        pinyin_index,
-        working_directory: None,
-        arguments: None,
-    })
-}
-
-fn start_menu_roots() -> Vec<PathBuf> {
-    let mut roots = Vec::new();
-    if let Some(app_data) = env::var_os("APPDATA") {
-        roots.push(PathBuf::from(app_data).join("Microsoft\\Windows\\Start Menu\\Programs"));
-    }
-    if let Some(program_data) = env::var_os("PROGRAMDATA") {
-        roots.push(PathBuf::from(program_data).join("Microsoft\\Windows\\Start Menu\\Programs"));
-    }
-
-    roots.into_iter().filter(|path| path.is_dir()).collect()
-}
-
-fn startup_directories() -> Vec<PathBuf> {
-    let mut startup = Vec::new();
-    if let Some(app_data) = env::var_os("APPDATA") {
-        startup.push(
-            PathBuf::from(app_data).join("Microsoft\\Windows\\Start Menu\\Programs\\Startup"),
-        );
-    }
-    if let Some(program_data) = env::var_os("PROGRAMDATA") {
-        startup.push(
-            PathBuf::from(program_data).join("Microsoft\\Windows\\Start Menu\\Programs\\Startup"),
-        );
-    }
-
-    startup.into_iter().filter(|path| path.is_dir()).collect()
-}
-
-fn enumerate_installed_win32_apps() -> Vec<ApplicationInfo> {
-    let mut applications = Vec::new();
-    let mut seen = HashSet::new();
-    let roots = [
-        RegKey::predef(HKEY_LOCAL_MACHINE),
-        RegKey::predef(HKEY_CURRENT_USER),
-    ];
-
-    for root in roots {
-        for subkey in UNINSTALL_SUBKEYS {
-            let Ok(uninstall_key) = root.open_subkey(subkey) else {
-                continue;
-            };
-
-            for entry in uninstall_key.enum_keys().flatten() {
-                let Ok(app_key) = uninstall_key.open_subkey(&entry) else {
-                    continue;
-                };
-
-                if let Some(app) = registry_entry_to_app(&app_key, subkey, &entry) {
-                    if seen.insert(app.id.clone()) {
-                        applications.push(app);
-                    }
-                }
-            }
-        }
-    }
-
-    applications
-}
-
-fn registry_entry_to_app(
-    key: &RegKey,
-    parent_path: &str,
-    entry_name: &str,
-) -> Option<ApplicationInfo> {
-    // Skip system or hidden components.
-    if key.get_value::<u32, _>("SystemComponent").ok() == Some(1) {
-        return None;
-    }
-    if key.get_value::<u32, _>("NoDisplay").ok() == Some(1) {
-        return None;
-    }
-
-    let display_name: String = key
-        .get_value::<String, _>("DisplayName")
-        .ok()?
-        .trim()
-        .to_string();
-    if display_name.is_empty() {
-        return None;
-    }
-
-    let display_icon_path = key
-        .get_value::<String, _>("DisplayIcon")
-        .ok()
-        .and_then(|value| sanitize_executable_path(&value));
-
-    let explicit_executable = key
-        .get_value::<String, _>("ExecutablePath")
-        .ok()
-        .and_then(|value| sanitize_executable_path(&value));
-
-    let install_executable = key
-        .get_value::<String, _>("InstallLocation")
-        .ok()
-        .and_then(|value| fallback_executable_from_folder(&value));
-
-    let install_source_executable = key
-        .get_value::<String, _>("InstallSource")
-        .ok()
-        .and_then(|value| fallback_executable_from_folder(&value));
-
-    let path = install_executable
-        .or(explicit_executable)
-        .or_else(|| {
-            display_icon_path
-                .clone()
-                .filter(|candidate| !looks_like_uninstaller(candidate))
-        })
-        .or(install_source_executable)?;
-
-    let description = key
-        .get_value::<String, _>("Publisher")
-        .ok()
-        .filter(|value| !value.trim().is_empty());
-
-    let mut keywords = Vec::new();
-    keywords.push(display_name.clone());
-    if let Some(desc) = description.clone() {
-        keywords.push(desc);
-    }
-    if let Ok(version) = key.get_value::<String, _>("DisplayVersion") {
-        if !version.trim().is_empty() {
-            keywords.push(version);
-        }
-    }
-
-    keywords.retain(|value| !value.trim().is_empty());
-    keywords.sort();
-    keywords.dedup();
-    let pinyin_index = build_pinyin_index(
-        [Some(display_name.as_str()), description.as_deref()]
-            .into_iter()
-            .flatten(),
-    );
-
-    Some(ApplicationInfo {
-        id: format!("win32:installed:{}:{}", parent_path, entry_name).to_lowercase(),
-        name: display_name,
-        path: path.clone(),
-        source_path: Some(path),
-        app_type: AppType::Win32,
-        description,
-        keywords,
-        pinyin_index,
-        working_directory: None,
-        arguments: None,
-    })
-}
-
-fn sanitize_executable_path(raw: &str) -> Option<String> {
-    let trimmed = raw.trim();
-    if trimmed.is_empty() {
-        return None;
-    }
-
-    let without_quotes = trimmed.trim_matches(|c| c == '"' || c == '\'');
-    let candidate = without_quotes
-        .split(&[',', ';'][..])
-        .next()
-        .map(str::trim)?;
-    if candidate.is_empty() {
-        return None;
-    }
-
-    let expanded = expand_env_vars(candidate).unwrap_or_else(|| candidate.to_string());
-    let path = Path::new(&expanded);
-    if path.is_file() {
-        Some(expanded)
-    } else {
-        None
-    }
-}
-
-fn fallback_executable_from_folder(raw: &str) -> Option<String> {
-    let trimmed = raw.trim();
-    if trimmed.is_empty() {
-        return None;
-    }
-    let expanded = expand_env_vars(trimmed).unwrap_or_else(|| trimmed.to_string());
-    let normalized_folder = expanded.trim_end_matches(['/', '\\']).to_string();
-    if normalized_folder.is_empty() {
-        return None;
-    }
-    let folder_path = Path::new(&normalized_folder);
-    if !folder_path.is_dir() {
-        return None;
-    }
-
-    let mut candidates = Vec::new();
-    if let Ok(entries) = fs::read_dir(folder_path) {
-        for entry in entries.flatten() {
-            let file_type = entry.file_type().ok();
-            if file_type.is_none_or(|ft| !ft.is_file()) {
-                continue;
-            }
-            let file_path = entry.path();
-            if file_path
-                .extension()
-                .and_then(|ext| ext.to_str())
-                .map(|ext| ext.eq_ignore_ascii_case("exe"))
-                .unwrap_or(false)
-            {
-                candidates.push(file_path);
-            }
-        }
-    }
-
-    candidates
-        .into_iter()
-        .max_by_key(|path| path.metadata().ok().map(|m| m.len()).unwrap_or(0))
-        .and_then(|path| path.into_os_string().into_string().ok())
-}
-
-fn looks_like_uninstaller(path: &str) -> bool {
+fn looks_like_file_path(path: &str) -> bool {
     let lower = path.to_ascii_lowercase();
-    lower.contains("unins") || lower.contains("uninstall")
+    lower.contains(":\\") || lower.contains(":/") || lower.starts_with("\\\\")
 }
 
-struct HandleGuard(HANDLE);
+struct ComInitGuard {
+    initialized: bool,
+}
 
-impl Drop for HandleGuard {
-    fn drop(&mut self) {
-        if self.0.is_invalid() {
-            return;
-        }
-        unsafe {
-            let _ = CloseHandle(self.0);
+impl ComInitGuard {
+    unsafe fn new() -> WinResult<Self> {
+        let hr = CoInitializeEx(None, COINIT_MULTITHREADED);
+        if hr.is_ok() {
+            Ok(Self { initialized: true })
+        } else if hr == RPC_E_CHANGED_MODE {
+            Ok(Self { initialized: false })
+        } else {
+            Err(WinError::from(hr))
         }
     }
 }
 
-struct LocalFreeGuard(HLOCAL);
-
-impl Drop for LocalFreeGuard {
+impl Drop for ComInitGuard {
     fn drop(&mut self) {
-        if self.0.is_invalid() {
-            return;
-        }
-        unsafe {
-            let _ = LocalFree(self.0);
+        if self.initialized {
+            unsafe {
+                CoUninitialize();
+            }
         }
     }
 }
 
-fn current_user_sid_hstring() -> WinResult<HSTRING> {
+struct CoTaskMemGuard(PWSTR);
+
+impl Drop for CoTaskMemGuard {
+    fn drop(&mut self) {
+        if self.0.is_null() {
+            return;
+        }
+        unsafe {
+            CoTaskMemFree(Some(self.0.as_ptr().cast()));
+        }
+    }
+}
+
+fn enumerate_shell_apps() -> WinResult<Vec<ApplicationInfo>> {
     unsafe {
-        let mut token = HANDLE::default();
-        OpenProcessToken(GetCurrentProcess(), TOKEN_QUERY, &mut token)?;
-        let _token_guard = HandleGuard(token);
+        let _com_guard = ComInitGuard::new()?;
+        let apps_folder: IShellItem =
+            SHGetKnownFolderItem(&FOLDERID_AppsFolder, KF_FLAG_DEFAULT, HANDLE::default())?;
+        let enumerator: IEnumShellItems = apps_folder.BindToHandler(None, &BHID_EnumItems)?;
 
-        let mut needed = 0u32;
-        let _ = GetTokenInformation(token, TokenUser, None, 0, &mut needed);
-        if needed == 0 {
-            return Err(WinError::from_win32());
-        }
-
-        let mut buffer = vec![0u8; needed as usize];
-        GetTokenInformation(
-            token,
-            TokenUser,
-            Some(buffer.as_mut_ptr().cast()),
-            needed,
-            &mut needed,
-        )?;
-
-        let token_user = buffer.as_ptr() as *const TOKEN_USER;
-        let sid = (*token_user).User.Sid;
-        let mut sid_ptr = PWSTR::null();
-        ConvertSidToStringSidW(sid, &mut sid_ptr)?;
-        let _sid_guard = LocalFreeGuard(HLOCAL(sid_ptr.as_ptr().cast()));
-        let sid_string = sid_ptr.to_string().map_err(|_| WinError::from_win32())?;
-
-        Ok(HSTRING::from(sid_string))
-    }
-}
-
-async fn enumerate_uwp_apps() -> WinResult<Vec<ApplicationInfo>> {
-    let manager = PackageManager::new()?;
-    let mut applications = Vec::new();
-
-    let iterable = match manager.FindPackages() {
-        Ok(iterable) => iterable,
-        Err(err) if err.code() == HRESULT(0x80070005_u32 as _) => {
-            let user_sid = current_user_sid_hstring()?;
-            manager.FindPackagesByUserSecurityId(&user_sid)?
-        }
-        Err(err) => return Err(err),
-    };
-    let iterator = iterable.First()?;
-    while iterator.HasCurrent()? {
-        let package = iterator.Current()?;
-        iterator.MoveNext()?;
-
-        let entries_future = package.GetAppListEntriesAsync()?;
-        let entries = entries_future.get()?;
-
-        let size = entries.Size()?;
-        for index in 0..size {
-            let entry = entries.GetAt(index)?;
-
-            let app_id = entry.AppUserModelId()?.to_string();
-            let display_info = entry.DisplayInfo()?;
-            let display_name = display_info.DisplayName()?.to_string();
-            let description = display_info
-                .Description()
-                .ok()
-                .map(|value| value.to_string())
-                .filter(|value| !value.is_empty());
-
-            let mut keywords = Vec::new();
-            if let Some(desc) = description.clone() {
-                keywords.push(desc);
+        let mut applications = Vec::new();
+        loop {
+            let mut fetched = 0u32;
+            let mut items: [Option<IShellItem>; 1] = [None];
+            enumerator.Next(&mut items, Some(&mut fetched))?;
+            if fetched == 0 {
+                break;
             }
-            keywords.push(display_name.clone());
-            keywords.push(app_id.clone());
 
-            if let Ok(package_id) = package.Id() {
-                if let Ok(name) = package_id.Name() {
-                    keywords.push(name.to_string());
-                }
-                if let Ok(family) = package_id.FamilyName() {
-                    keywords.push(family.to_string());
-                }
-                if let Ok(full) = package_id.FullName() {
-                    keywords.push(full.to_string());
-                }
+            let Some(item) = items[0].take() else {
+                continue;
+            };
+
+            if is_shell_item_hidden(&item) {
+                continue;
             }
-            keywords.retain(|value| !value.is_empty());
+
+            let name = match shell_item_display_name(&item, SIGDN_NORMALDISPLAY) {
+                Some(name) => name,
+                None => continue,
+            };
+            if looks_like_uninstaller(&name) {
+                continue;
+            }
+
+            let parsing_name = match shell_item_display_name(&item, SIGDN_DESKTOPABSOLUTEPARSING) {
+                Some(value) => value,
+                None => continue,
+            };
+
+            let app_type = infer_shell_app_type(&parsing_name);
+            let mut keywords = vec![name.clone(), parsing_name.clone()];
             keywords.sort();
             keywords.dedup();
-            let pinyin_index = build_pinyin_index(
-                [Some(display_name.as_str()), description.as_deref()]
-                    .into_iter()
-                    .flatten(),
-            );
+            let pinyin_index = build_pinyin_index([Some(name.as_str())].into_iter().flatten());
 
             applications.push(ApplicationInfo {
-                id: format!("uwp:{}", app_id.to_lowercase()),
-                name: display_name,
-                path: app_id,
+                id: format!("shell:{}", parsing_name.to_ascii_lowercase()),
+                name,
+                path: parsing_name,
                 source_path: None,
-                app_type: AppType::Uwp,
-                description,
+                app_type,
+                description: None,
                 keywords,
                 pinyin_index,
                 working_directory: None,
                 arguments: None,
             });
         }
-    }
 
-    Ok(applications)
+        Ok(applications)
+    }
+}
+
+fn shell_item_display_name(item: &IShellItem, sigdn: SIGDN) -> Option<String> {
+    let display = unsafe { item.GetDisplayName(sigdn).ok()? };
+    if display.is_null() {
+        return None;
+    }
+    let _guard = CoTaskMemGuard(display);
+    let value = unsafe { display.to_string().ok()? };
+    let trimmed = value.trim();
+    if trimmed.is_empty() {
+        None
+    } else {
+        Some(trimmed.to_string())
+    }
+}
+
+fn is_shell_item_hidden(item: &IShellItem) -> bool {
+    match unsafe { item.GetAttributes(SFGAO_HIDDEN) } {
+        Ok(attributes) => attributes.contains(SFGAO_HIDDEN),
+        Err(_) => false,
+    }
+}
+
+fn infer_shell_app_type(parsing_name: &str) -> AppType {
+    let lower = parsing_name.to_ascii_lowercase();
+    if lower.starts_with("shell:appsfolder\\") && lower.contains('!') {
+        AppType::Uwp
+    } else {
+        AppType::Win32
+    }
+}
+
+fn looks_like_uninstaller(value: &str) -> bool {
+    let lower = value.to_ascii_lowercase();
+    lower.contains("unins") || lower.contains("uninstall")
 }

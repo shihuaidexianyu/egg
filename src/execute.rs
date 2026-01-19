@@ -1,73 +1,27 @@
 use std::{
     ffi::{OsStr, OsString},
-    path::Path,
     ptr,
-    sync::mpsc,
 };
 
-use once_cell::sync::Lazy;
 use windows::{
-    core::{HSTRING, PCWSTR},
+    core::PCWSTR,
     Win32::{
         Foundation::HWND,
-        System::Com::{CoCreateInstance, CLSCTX_LOCAL_SERVER},
-        UI::Shell::{
-            ApplicationActivationManager, IApplicationActivationManager, ShellExecuteW,
-            ACTIVATEOPTIONS,
-        },
+        UI::Shell::ShellExecuteW,
         UI::WindowsAndMessaging::SW_SHOWNORMAL,
     },
 };
 
 use crate::{
-    models::{AppType, ApplicationInfo},
+    models::ApplicationInfo,
     state::PendingAction,
-    windows_utils::{os_str_to_wide, ComGuard},
+    windows_utils::os_str_to_wide,
 };
-
-static UWP_LAUNCHER: Lazy<UwpLauncher> = Lazy::new(UwpLauncher::new);
-
-struct UwpRequest {
-    app_id: String,
-    response: mpsc::Sender<Result<(), String>>,
-}
-
-struct UwpLauncher {
-    sender: mpsc::Sender<UwpRequest>,
-}
-
-impl UwpLauncher {
-    fn new() -> Self {
-        let (sender, receiver) = mpsc::channel::<UwpRequest>();
-        std::thread::spawn(move || uwp_thread_loop(receiver));
-        Self { sender }
-    }
-}
-
-fn uwp_thread_loop(receiver: mpsc::Receiver<UwpRequest>) {
-    for request in receiver {
-        let result = (|| unsafe {
-            let _guard = ComGuard::new().map_err(|err| err.to_string())?;
-            let manager: IApplicationActivationManager =
-                CoCreateInstance(&ApplicationActivationManager, None, CLSCTX_LOCAL_SERVER)
-                    .map_err(|err| err.to_string())?;
-            let app_id = HSTRING::from(request.app_id);
-            manager
-                .ActivateApplication(&app_id, PCWSTR::null(), ACTIVATEOPTIONS::default())
-                .map_err(|err| err.to_string())?;
-            Ok(())
-        })();
-        let _ = request.response.send(result);
-    }
-}
 
 /// Execute a pending action (launch app, open URL, etc.)
 pub fn execute_action(action: &PendingAction, run_as_admin: bool) -> Result<(), String> {
     match action {
-        PendingAction::Application(app) => match app.app_type {
-            AppType::Win32 => launch_win32_app(app, run_as_admin),
-            AppType::Uwp => launch_uwp_app(&app.path),
-        },
+        PendingAction::Application(app) => launch_application(app, run_as_admin),
         PendingAction::Bookmark(entry) => open_url(&entry.url),
         PendingAction::Url(url) | PendingAction::Search(url) => open_url(url),
     }
@@ -77,69 +31,34 @@ fn open_url(target: &str) -> Result<(), String> {
     open::that(target).map_err(|err| err.to_string())
 }
 
-fn launch_win32_app(app: &ApplicationInfo, run_as_admin: bool) -> Result<(), String> {
-    let primary = Path::new(&app.path);
-    match shell_execute_path(primary, run_as_admin) {
+fn launch_application(app: &ApplicationInfo, run_as_admin: bool) -> Result<(), String> {
+    let target = app.path.trim();
+    if target.is_empty() {
+        return Err("目标程序无效".into());
+    }
+
+    let arguments = app.arguments.as_deref();
+    let working_directory = app.working_directory.as_deref();
+    let allow_runas = run_as_admin && should_use_runas(target);
+
+    match shell_execute_raw(target, arguments, working_directory, allow_runas) {
         Ok(_) => Ok(()),
-        Err(primary_err) => {
-            if let Some(source) = &app.source_path {
-                launch_from_source(
-                    source,
-                    app.arguments.as_deref(),
-                    app.working_directory.as_deref(),
-                    run_as_admin,
-                )
-                .or(Err(primary_err))
+        Err(err) => {
+            if let Some(source) = app.source_path.as_deref() {
+                shell_execute_raw(source, arguments, working_directory, allow_runas).or(Err(err))
             } else {
-                Err(primary_err)
+                Err(err)
             }
         }
     }
 }
 
-fn shell_execute_path(path: &Path, run_as_admin: bool) -> Result<(), String> {
-    if !path.exists() {
-        return Err("目标程序不存在或已被移动".into());
+fn should_use_runas(target: &str) -> bool {
+    let lower = target.trim().to_ascii_lowercase();
+    if lower.is_empty() {
+        return false;
     }
-
-    let verb = if run_as_admin {
-        Some(OsStr::new("runas"))
-    } else {
-        None
-    };
-    shell_execute_internal(path.as_os_str(), None, None, verb)
-}
-
-fn launch_uwp_app(app_id: &str) -> Result<(), String> {
-    let (response_tx, response_rx) = mpsc::channel();
-    UWP_LAUNCHER
-        .sender
-        .send(UwpRequest {
-            app_id: app_id.to_string(),
-            response: response_tx,
-        })
-        .map_err(|_| "UWP 启动线程不可用".to_string())?;
-    response_rx
-        .recv()
-        .map_err(|_| "UWP 启动线程不可用".to_string())?
-}
-
-fn launch_from_source(
-    source: &str,
-    arguments: Option<&str>,
-    working_directory: Option<&str>,
-    run_as_admin: bool,
-) -> Result<(), String> {
-    let normalized = source.trim().trim_matches(|c| c == '"' || c == '\'');
-    if normalized.is_empty() {
-        return Err("备用路径无效".into());
-    }
-
-    if normalized.contains("://") && !Path::new(normalized).exists() {
-        return shell_execute_uri(normalized);
-    }
-
-    shell_execute_raw(normalized, arguments, working_directory, run_as_admin)
+    !(lower.starts_with("shell:") || lower.contains("://"))
 }
 
 fn shell_execute_raw(
@@ -159,9 +78,9 @@ fn shell_execute_raw(
         .map(OsString::from);
 
     let verb = if run_as_admin {
-        Some(OsStr::new("runas"))
+        OsStr::new("runas")
     } else {
-        None
+        OsStr::new("open")
     };
 
     shell_execute_internal(
@@ -172,21 +91,16 @@ fn shell_execute_raw(
     )
 }
 
-fn shell_execute_uri(uri: &str) -> Result<(), String> {
-    let uri_os = OsString::from(uri);
-    shell_execute_internal(uri_os.as_os_str(), None, None, None)
-}
-
 fn shell_execute_internal(
     target: &OsStr,
     arguments: Option<&OsStr>,
     working_directory: Option<&OsStr>,
-    verb: Option<&OsStr>,
+    verb: &OsStr,
 ) -> Result<(), String> {
     let file_buffer = os_str_to_wide(target);
     let arg_buffer = arguments.map(os_str_to_wide);
     let dir_buffer = working_directory.map(os_str_to_wide);
-    let verb_buffer = verb.map(os_str_to_wide);
+    let verb_buffer = os_str_to_wide(verb);
 
     let arg_ptr = arg_buffer
         .as_ref()
@@ -196,10 +110,7 @@ fn shell_execute_internal(
         .as_ref()
         .map(|value| PCWSTR(value.as_ptr()))
         .unwrap_or(PCWSTR::null());
-    let verb_ptr = verb_buffer
-        .as_ref()
-        .map(|value| PCWSTR(value.as_ptr()))
-        .unwrap_or(PCWSTR::null());
+    let verb_ptr = PCWSTR(verb_buffer.as_ptr());
 
     let result = unsafe {
         ShellExecuteW(

@@ -219,7 +219,6 @@ dependencies = [
  "env_logger",
  "fuzzy-matcher",
  "log",
- "once_cell",
  "open",
  "pinyin",
  "ratatui",
