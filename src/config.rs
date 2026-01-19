@@ -7,6 +7,8 @@ const CONFIG_FILE: &str = "settings.json";
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AppConfig {
     pub global_hotkey: String,
+    #[serde(default = "default_blacklist_hotkey")]
+    pub blacklist_hotkey: String,
     #[serde(default = "default_query_delay")]
     // ensure backward compatibility when loading old config files
     pub query_delay_ms: u64,
@@ -47,6 +49,7 @@ impl Default for AppConfig {
     fn default() -> Self {
         Self {
             global_hotkey: "Alt+Space".to_string(),
+            blacklist_hotkey: default_blacklist_hotkey(),
             query_delay_ms: default_query_delay(),
             max_results: default_max_results(),
             enable_app_results: default_enable_app_results(),
@@ -90,6 +93,10 @@ fn default_prefix_search() -> String {
     "S".to_string()
 }
 
+fn default_blacklist_hotkey() -> String {
+    "Ctrl+B".to_string()
+}
+
 const fn default_launch_on_startup() -> bool {
     false
 }
@@ -126,11 +133,32 @@ impl AppConfig {
         if let Some(parent) = path.parent() {
             fs::create_dir_all(parent).map_err(|err| err.to_string())?;
         }
-        let data = serde_json::to_string_pretty(self).map_err(|err| err.to_string())?;
+        let new_value =
+            serde_json::to_value(self).map_err(|err| format!("Serialize failed: {err}"))?;
+        let merged_value = if let Ok(existing) = fs::read_to_string(&path) {
+            if let Ok(existing_value) = serde_json::from_str::<serde_json::Value>(&existing) {
+                if let (serde_json::Value::Object(mut existing_map), serde_json::Value::Object(new_map)) =
+                    (existing_value, new_value.clone())
+                {
+                    for (key, val) in new_map {
+                        existing_map.insert(key, val);
+                    }
+                    serde_json::Value::Object(existing_map)
+                } else {
+                    new_value
+                }
+            } else {
+                new_value
+            }
+        } else {
+            new_value
+        };
+
+        let data = serde_json::to_string_pretty(&merged_value).map_err(|err| err.to_string())?;
         fs::write(path, data).map_err(|err| err.to_string())
     }
 }
 
-fn config_path() -> Option<PathBuf> {
+pub fn config_path() -> Option<PathBuf> {
     dirs::config_dir().map(|dir| dir.join("egg-cli").join(CONFIG_FILE))
 }

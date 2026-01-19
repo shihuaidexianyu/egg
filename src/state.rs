@@ -79,6 +79,13 @@ impl RecentList {
         self.entries.iter()
     }
 
+    pub fn retain<F>(&mut self, mut keep: F)
+    where
+        F: FnMut(&RecentEntry) -> bool,
+    {
+        self.entries.retain(|entry| keep(entry));
+    }
+
     fn evict_if_needed(&mut self) {
         while self.entries.len() > self.capacity {
             self.entries.pop_back();
