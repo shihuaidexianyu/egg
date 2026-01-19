@@ -1,196 +1,200 @@
-# egg 启动器
+# egg-cli
 
-参考Flow.Launcher的实现逻辑
+A lightweight Windows command-line launcher inspired by Flow Launcher. Built with Rust for fast application indexing, Chrome bookmark searching, and web search.
 
-基于 **Tauri 2 + React + TypeScript** 的轻量级启动器，目标是提供类似 Flow Launcher 的体验：
+## Features
 
-- `Alt+Space` 一键唤出/隐藏窗口
-- 在同一个输入框中模糊搜索 **应用 / Chrome 书签 / 网络搜索**
-- 支持 `r / b / s` 一类前缀切换不同搜索模式
-- 自带设置页面，可以修改全局快捷键、搜索延迟、最大结果数和模式前缀
+- **Application Search**: Fuzzy search for Win32 and UWP applications
+- **Bookmark Search**: Search Chrome bookmarks from all profiles
+- **Web Search**: Direct Google search integration
+- **Pinyin Support**: Chinese character matching with pinyin variants
+- **Fast Indexing**: Efficient application and bookmark indexing
 
-> 当前实现主要针对 Windows 平台，应用索引采用 Win32/UWP 扫描，书签索引来自本机 Chrome。
+## Prerequisites
 
----
+- Windows 10/11
+- [Rust toolchain](https://www.rust-lang.org/tools/install) (stable)
 
-## 功能概览
+## Installation
 
-- **应用搜索**：
-	- 自动索引 Win32 / UWP 应用
-	- 支持名称、拼音/首字母以及自定义关键字的模糊匹配
-- **书签搜索**：
-	- 从 Chrome 收藏夹构建索引
-	- 支持按标题、文件夹路径或 URL 搜索
-- **网络搜索**：
-	- 直接输入内容回车，会在结果中附加一条“在 Google 上搜索”的候选
-	- 当输入本身类似 URL 时，会优先出现“打开网址”项
-- **模式前缀**：
-	- 默认前缀：
-		- `r`：应用模式（只在本机应用中搜索）
-		- `b`：书签模式（只在书签中搜索）
-		- `s`：搜索模式（只追加网络搜索）
-	- 用法示例：
-		- `r 记事本`：仅在应用中搜索“记事本”
-		- `b 前端`：仅在书签中搜索“前端”
-		- `s rust tauri`：只触发网络搜索候选
-- **结果列表**：
-	- 上下方向键切换选中项
-	- 回车执行选中项
-	- 每条结果显示来源标签：应用 / 书签 / 网址 / 搜索
-- **窗口行为**：
-	- 全局快捷键（默认 `Alt+Space`）唤起主窗口
-	- 回车执行后自动隐藏窗口，并清空搜索状态
-	- `Esc` 也会通过统一事件重置并隐藏窗口
-	- **单实例**：如果程序已经在运行，再次启动只会唤醒现有窗口（不会开启第二个进程）
-	- 唤起窗口时自动聚焦搜索框，并强制切换为英文输入法，确保快捷输入
-- **设置窗口**：
-	- 内置 Tauri 子窗口，使用 React 编写
-	- 支持修改：
-		- 全局快捷键
-		- 搜索防抖延迟（ms）
-		- 最大结果数量
-		- 是否启用“应用结果”和“书签结果”
-		- 三种模式的前缀字母
-		- 开机自启动开关
-		- 唤起窗口时是否强制切换英文输入法
-		- 调试模式（控制是否允许右键唤出调试菜单）
-
----
-
-## 技术栈
-
-- **前端**：React + TypeScript + Vite
-- **桌面壳**：Tauri 2
-- **后端逻辑（Rust）**：
-	- 应用索引 & 启动（Win32 / UWP）
-	- Chrome 书签加载与模糊匹配
-	- 全局快捷键绑定
-	- 配置读写 (`settings.json`)
-
-主要入口：
-
-- `src/App.tsx`：根据 URL 参数切换主窗口 / 设置窗口
-- `src/components/LauncherWindow.tsx`：主搜索窗口
-- `src/components/SettingsWindow.tsx`：设置窗口
-- `src-tauri/src/commands.rs`：Tauri 后端命令（查询、执行、索引、配置）
-- `src-tauri/src/config.rs`：应用配置结构及持久化逻辑
-
----
-
-## 环境准备
-
-### 必备工具
-
-- [Node.js 18+](https://nodejs.org/)（推荐启用 Corepack）
-- [Rust toolchain](https://www.rust-lang.org/tools/install)（稳定版即可）
-- Windows 平台需要满足 [Tauri 系统要求](https://tauri.app/v1/guides/getting-started/prerequisites/)
-
-### 启用 pnpm（推荐）
+### Build from source
 
 ```bash
-corepack enable
-corepack prepare pnpm@9.12.0 --activate
+# Clone or navigate to the project directory
+cd egg
+
+# Build the release binary
+cargo build --release
+
+# The binary will be at:
+# target/release/egg-cli.exe
 ```
 
-如果 Corepack 无法修改全局 Node，请手动安装 pnpm：
+### Add to PATH (optional)
+
+To run `egg-cli` from anywhere, add the release directory to your system PATH:
+
+```powershell
+# Add to current session
+$env:PATH += ";C:\Users\YourName\Desktop\egg\target\release"
+
+# Or add permanently via System Environment Variables
+```
+
+## Usage
+
+### Interactive Mode
 
 ```bash
-npm install -g pnpm@9.12.0
+egg-cli
 ```
 
----
+**Commands:**
+- `<query>` - Search for apps, bookmarks, or URLs
+- `!1` - Launch the first search result
+- `help` - Show available commands
+- `reindex` - Rebuild application and bookmark indexes
+- `clear` - Clear current search results
+- `quit` - Exit egg-cli
 
-## 本地开发
+**Examples:**
+```
+> chrome          # Search for Chrome
+[1] Google Chrome
+[2] Chrome Remote Desktop
 
-安装依赖：
+> !1              # Launch first result
+Launched successfully!
+
+> https://github.com  # Open URL directly
+[1] 打开网址: https://github.com
+
+> !1
+Launched successfully!
+```
+
+### Configuration
+
+Configuration is stored in `%APPDATA%\egg-cli\settings.json`.
+
+Default configuration:
+```json
+{
+  "global_hotkey": "Alt+Space",
+  "query_delay_ms": 120,
+  "max_results": 40,
+  "enable_app_results": true,
+  "enable_bookmark_results": true,
+  "prefix_app": "R",
+  "prefix_bookmark": "B",
+  "prefix_search": "S",
+  "launch_on_startup": false,
+  "force_english_input": true,
+  "debug_mode": false,
+  "system_tool_exclusions": [
+    "c:\\windows\\system32",
+    "c:\\windows\\syswow64",
+    "c:\\windows\\winsxs"
+  ]
+}
+```
+
+## Development
+
+### Build
 
 ```bash
-pnpm install
+cargo build
 ```
 
-仅启动前端（浏览器中访问）：
+### Run
 
 ```bash
-pnpm run dev
+cargo run
 ```
 
-启动 Tauri 桌面应用（推荐开发方式）：
+### Test
 
 ```bash
-pnpm run tauri dev
+cargo test
 ```
 
-启动后：
+## Project Structure
 
-- 使用默认快捷键 `Alt+Space` 唤出 egg 主窗口
-- 输入内容即可搜索
-- `Ctrl+,` 可以从主窗口打开设置窗口
-
----
-
-## 常用脚本
-
-```bash
-pnpm run build        # TypeScript 类型检查 + 生产构建
-pnpm run preview      # 启动本地预览服务器
-pnpm run format       # 使用 Prettier 格式化代码
-pnpm run lint         # 仅做类型检查
-pnpm run tauri build  # 构建桌面安装包
-cargo xtask fmt       # 格式化所有代码
-cargo xtask check     # 检查所有代码
-cargo xtask package   # 一键执行 pnpm build + tauri build
+```
+egg/
+├── src/                    # Source code
+│   ├── main.rs            # CLI entry point and REPL
+│   ├── config.rs          # Configuration management
+│   ├── search_core.rs     # Search logic
+│   ├── execute.rs         # Action execution
+│   ├── indexer.rs         # Application indexing
+│   ├── bookmarks.rs       # Chrome bookmark parsing
+│   ├── state.rs           # Application state
+│   ├── models.rs          # Data structures
+│   ├── text_utils.rs      # Text processing (pinyin)
+│   └── windows_utils.rs   # Windows-specific utilities
+├── Cargo.toml             # Rust dependencies
+└── README.md              # This file
 ```
 
----
+## Architecture
 
-## 打包桌面应用
+### Core Modules
 
-1. **安装打包依赖（仅需一次）**：
-	 - Rust 工具链，并添加 MSVC 目标：`rustup target add x86_64-pc-windows-msvc`
-	 - 安装 WebView2 运行时和 Tauri 文档中要求的 Windows 构建工具
+**Search Core** (`search_core.rs`):
+- Pure business logic for fuzzy matching
+- No platform-specific code
+- Supports apps, bookmarks, and web search
 
-2. **构建前端与桌面二进制**：
+**Indexer** (`indexer.rs`):
+- Scans Start Menu shortcuts
+- Enumerates Win32 apps from registry
+- Lists UWP applications
+- Icon extraction with caching
 
-	 ```bash
-	 pnpm install
-	 pnpm run build          # 可选：提前暴露前端问题
-	 pnpm run tauri build    # 在 src-tauri/target/release/ 下生成 exe 和安装包
-	 ```
+**Executor** (`execute.rs`):
+- Launches Win32 applications via ShellExecute
+- Activates UWP apps via ApplicationActivationManager
+- Opens URLs in default browser
 
-3. **分发产物**：
-	 - `src-tauri/target/release/egg.exe`：可直接运行的便携版程序
-	 - `src-tauri/target/release/*.msi` 或 `*.nsis.exe`：给用户安装的安装包
+### Data Flow
 
-需要调试版时，可以在构建命令后追加 `--debug`。如需自定义图标、签名或自动更新等，请编辑 `src-tauri/tauri.conf.json` 中的 `bundle` 配置。
+1. User enters query → REPL parses input
+2. Search core performs fuzzy match on indexes
+3. Results displayed with numbered indices
+4. User enters `!N` to execute
+5. Executor launches selected item
 
----
+## Technical Details
 
-## 配置与数据存储
+### Windows APIs Used
 
-应用的所有持久化设置都保存在 `settings.json` 中，路径由 Tauri 的 `app_config_dir` 决定，基于本项目的标识符 `com.egg.app`：
+- **ShellExecuteW** - Launch Win32 applications
+- **IApplicationActivationManager** - Activate UWP apps
+- **Registry** - Enumerate installed software
+- **PackageManager** - List UWP packages
 
-- **Windows**：`%APPDATA%/com.egg.app/settings.json`
-	- 示例：`C:\Users\<你>\AppData\Roaming\com.egg.app\settings.json`
-- **macOS**：`~/Library/Application Support/com.egg.app/settings.json`
-- **Linux**：`$XDG_CONFIG_HOME/com.egg.app/settings.json`
-	- 若未设置 `XDG_CONFIG_HOME`，则为 `~/.config/com.egg.app/settings.json`
+### Dependencies
 
-`settings.json` 中主要字段包括：
+- `tokio` - Async runtime
+- `serde` / `serde_json` - Serialization
+- `fuzzy-matcher` - Fuzzy search algorithm
+- `windows` crate - Win32/UWP APIs
+- `dirs` - Cross-platform config directories
+- `open` - Cross-platform URL opening
+- `pinyin` - Chinese character conversion
 
-- `global_hotkey`：全局唤起快捷键（如 `Alt+Space`）
-- `query_delay_ms`：搜索防抖延迟（毫秒）
-- `max_results`：结果数量上限
-- `enable_app_results` / `enable_bookmark_results`：是否启用应用/书签结果
-- `prefix_app` / `prefix_bookmark` / `prefix_search`：三种模式的前缀字母
+## Limitations
 
-> 建议优先通过应用内的“设置”页面修改上述配置。手动编辑 `settings.json` 时，请在关闭应用后进行，并在修改完成后重新启动 egg 以生效。
+- Windows-only (uses Win32/UWP APIs)
+- Chrome bookmarks only (Edge/Firefox support planned)
+- Google search only (custom engines configurable in code)
 
----
+## License
 
-## 已知限制 / 后续计划
+MIT
 
-- 当前主要在 Windows 上开发与测试，其他平台支持尚未完善
-- 书签索引仅支持 Chrome，如需支持 Edge/Firefox，可在后续版本扩展
-- 搜索结果固定追加 Google 搜索，如需自定义搜索引擎可以在后端增加配置项
+## Contributing
 
-欢迎基于本项目进行二次开发或提交 PR，一起打磨更好用的 Rust 桌面启动器。
+Contributions are welcome! Please feel free to submit issues or pull requests.

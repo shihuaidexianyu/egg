@@ -1,3 +1,46 @@
-[workspace]
-members = ["src-tauri", "xtask"]
-resolver = "2"
+[package]
+name = "egg-cli"
+version = "0.1.0"
+description = "Command-line launcher for Windows applications"
+authors = ["egg"]
+edition = "2021"
+
+[dependencies]
+tokio = { version = "1", features = ["full"] }
+dirs = "5"
+open = "5"
+env_logger = "0.11"
+anyhow = "1"
+console = "0.15"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+fuzzy-matcher = "0.3"
+base64 = "0.22"
+urlencoding = "2"
+image = { version = "0.24", default-features = false, features = ["png"] }
+sha1 = "0.10"
+winreg = "0.52"
+windows = { version = "0.58", features = [
+    "Win32_System_Com",
+    "Win32_System_Com_StructuredStorage",
+    "Win32_System_WinRT",
+    "Win32_System_LibraryLoader",
+    "Win32_System_Threading",
+    "Win32_UI_Shell",
+    "Win32_UI_WindowsAndMessaging",
+    "Win32_UI_Input_KeyboardAndMouse",
+    "Win32_Storage_FileSystem",
+    "Win32_Storage_EnhancedStorage",
+    "Win32_Storage_StructuredStorage",
+    "Win32_Graphics_Gdi",
+    "Win32_System_Environment",
+    "ApplicationModel",
+    "ApplicationModel_Core",
+    "Management_Deployment",
+    "Foundation",
+    "Foundation_Collections",
+    "Storage_Streams",
+] }
+log = "0.4"
+pinyin = "0.10"
+once_cell = "1"

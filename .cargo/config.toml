@@ -1,8 +1,0 @@
-[alias]
-xtask = "run --package cargo-xtask --"
-
-[build]
-target-dir = "target"
-
-[env]
-CARGO_TARGET_DIR = { value = "target", force = true }
