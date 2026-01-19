@@ -1,8 +1,0 @@
-{
-  "permissions": {
-    "allow": [
-      "Bash(findstr \"^\\\\.\\\\|\\\\.md\\\\|\\\\.cursor\\\\|\\\\.github\")",
-      "Bash(cargo build:*)"
-    ]
-  }
-}
