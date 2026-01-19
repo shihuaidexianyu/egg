@@ -14,7 +14,9 @@ use ratatui::{
 };
 
 use crate::{
+    cache,
     config::AppConfig,
+    indexer::build_index,
     models::SearchResult,
     search_core as core,
     state::{AppState, CachedSearch, PendingAction},
@@ -56,12 +58,10 @@ enum SettingKind {
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum SettingId {
     GlobalHotkey,
-    QueryDelayMs,
     MaxResults,
+    SystemToolExclusions,
     EnableAppResults,
     EnableBookmarkResults,
-    ForceEnglishInput,
-    DebugMode,
     LaunchOnStartup,
 }
 
@@ -81,16 +81,16 @@ const SETTINGS: &[SettingItem] = &[
         kind: SettingKind::Text,
     },
     SettingItem {
-        id: SettingId::QueryDelayMs,
-        label: "Query Delay (ms)",
-        description: "Delay before search triggers (ms).",
-        kind: SettingKind::Number { min: 0, max: 2000 },
-    },
-    SettingItem {
         id: SettingId::MaxResults,
         label: "Max Results",
         description: "Maximum results returned per query.",
         kind: SettingKind::Number { min: 10, max: 60 },
+    },
+    SettingItem {
+        id: SettingId::SystemToolExclusions,
+        label: "Blacklist Paths",
+        description: "One path prefix per line. Ctrl+Enter to save.",
+        kind: SettingKind::Text,
     },
     SettingItem {
         id: SettingId::EnableAppResults,
@@ -102,18 +102,6 @@ const SETTINGS: &[SettingItem] = &[
         id: SettingId::EnableBookmarkResults,
         label: "Bookmark Results",
         description: "Include browser bookmarks in search.",
-        kind: SettingKind::Toggle,
-    },
-    SettingItem {
-        id: SettingId::ForceEnglishInput,
-        label: "Force English Input",
-        description: "Try to switch IME to English when active.",
-        kind: SettingKind::Toggle,
-    },
-    SettingItem {
-        id: SettingId::DebugMode,
-        label: "Debug Mode",
-        description: "Enable verbose logging.",
         kind: SettingKind::Toggle,
     },
     SettingItem {
@@ -307,8 +295,14 @@ fn handle_settings_key_event(key: KeyEvent, ui_state: &mut TuiState, app_state: 
                 keep_editing = false;
             }
             KeyCode::Enter => {
-                commit_setting_edit(&editing, ui_state, app_state);
-                keep_editing = false;
+                if editing.id == SettingId::SystemToolExclusions
+                    && !key.modifiers.contains(KeyModifiers::CONTROL)
+                {
+                    editing.buffer.push('\n');
+                } else {
+                    commit_setting_edit(&editing, ui_state, app_state);
+                    keep_editing = false;
+                }
             }
             KeyCode::Backspace => {
                 editing.buffer.pop();
@@ -688,10 +682,15 @@ fn render_results(frame: &mut Frame, area: Rect, ui_state: &mut TuiState, theme:
                 Style::default().fg(theme.text).add_modifier(Modifier::BOLD),
             ));
             let (type_label, type_color) = result_type_info(&result.action_id, theme);
-            let subtitle = Line::from(Span::styled(
-                type_label,
-                Style::default().fg(type_color),
-            ));
+            let mut subtitle_spans = Vec::new();
+            subtitle_spans.push(Span::styled(type_label, Style::default().fg(type_color)));
+            if !result.subtitle.trim().is_empty() {
+                subtitle_spans.push(Span::styled(
+                    format!(" {}", result.subtitle),
+                    Style::default().fg(theme.dim),
+                ));
+            }
+            let subtitle = Line::from(subtitle_spans);
             ListItem::new(vec![title, subtitle])
         })
         .collect();
@@ -710,11 +709,11 @@ fn render_results(frame: &mut Frame, area: Rect, ui_state: &mut TuiState, theme:
 
 fn result_type_info(action_id: &str, theme: Theme) -> (&'static str, Color) {
     match action_id {
-        "app" => ("Application", theme.accent),
-        "uwp" => ("Microsoft Store Application", Color::Rgb(126, 211, 158)),
-        "bookmark" => ("Bookmark", Color::Rgb(122, 199, 242)),
-        "url" => ("Web Address", Color::Rgb(238, 185, 110)),
-        "search" => ("Web Search", Color::Rgb(190, 168, 255)),
+        "app" => ("app", theme.accent),
+        "uwp" => ("uwp", Color::Rgb(126, 211, 158)),
+        "bookmark" => ("bookmark", Color::Rgb(122, 199, 242)),
+        "url" => ("url", Color::Rgb(238, 185, 110)),
+        "search" => ("search", Color::Rgb(190, 168, 255)),
         _ => ("Other", theme.dim),
     }
 }
@@ -781,7 +780,7 @@ fn render_settings(
     let list_items: Vec<ListItem> = SETTINGS
         .iter()
         .map(|item| {
-            let value = setting_value(&config, item.id);
+            let value = setting_list_value(&config, item.id);
             let is_editing = ui_state
                 .settings
                 .editing
@@ -836,19 +835,59 @@ fn render_settings(
             Style::default().fg(theme.dim),
         )),
         Line::from(Span::raw("")),
-        Line::from(Span::styled(
-            format!("Current: {}", setting_value(&config, current.id)),
-            Style::default().fg(theme.text),
-        )),
     ];
+    if current.id == SettingId::SystemToolExclusions {
+        detail_lines.push(Line::from(Span::styled(
+            "Current:",
+            Style::default().fg(theme.text),
+        )));
+        if config.system_tool_exclusions.is_empty() {
+            detail_lines.push(Line::from(Span::styled(
+                "  (none)",
+                Style::default().fg(theme.dim),
+            )));
+        } else {
+            for path in &config.system_tool_exclusions {
+                detail_lines.push(Line::from(Span::styled(
+                    format!("  {path}"),
+                    Style::default().fg(theme.text),
+                )));
+            }
+        }
+    } else {
+        detail_lines.push(Line::from(Span::styled(
+            format!("Current: {}", setting_list_value(&config, current.id)),
+            Style::default().fg(theme.text),
+        )));
+    }
 
     if let Some(editing) = ui_state.settings.editing.as_ref() {
         if editing.id == current.id {
             detail_lines.push(Line::from(Span::raw("")));
-            detail_lines.push(Line::from(Span::styled(
-                format!("Editing: {}", editing.buffer),
-                Style::default().fg(theme.accent),
-            )));
+            if editing.id == SettingId::SystemToolExclusions {
+                detail_lines.push(Line::from(Span::styled(
+                    "Editing (Enter: new line, Ctrl+Enter: save):",
+                    Style::default().fg(theme.accent),
+                )));
+                if editing.buffer.is_empty() {
+                    detail_lines.push(Line::from(Span::styled(
+                        "  (empty)",
+                        Style::default().fg(theme.dim),
+                    )));
+                } else {
+                    for line in editing.buffer.lines() {
+                        detail_lines.push(Line::from(Span::styled(
+                            format!("  {line}"),
+                            Style::default().fg(theme.accent),
+                        )));
+                    }
+                }
+            } else {
+                detail_lines.push(Line::from(Span::styled(
+                    format!("Editing: {}", editing.buffer),
+                    Style::default().fg(theme.accent),
+                )));
+            }
         }
     }
 
@@ -914,8 +953,6 @@ fn toggle_setting(ui_state: &mut TuiState, app_state: &AppState) {
         SettingId::EnableBookmarkResults => {
             config.enable_bookmark_results = !config.enable_bookmark_results
         }
-        SettingId::ForceEnglishInput => config.force_english_input = !config.force_english_input,
-        SettingId::DebugMode => config.debug_mode = !config.debug_mode,
         SettingId::LaunchOnStartup => {
             config.launch_on_startup = !config.launch_on_startup;
             new_launch_setting = Some(config.launch_on_startup);
@@ -937,7 +974,7 @@ fn start_setting_edit(ui_state: &mut TuiState, app_state: &AppState) {
     match item.kind {
         SettingKind::Number { .. } | SettingKind::Text => {
             let config = app_state.config.lock().unwrap().clone();
-            let buffer = setting_value(&config, item.id);
+            let buffer = setting_edit_value(&config, item.id);
             ui_state.settings.editing = Some(EditState {
                 id: item.id,
                 buffer,
@@ -959,7 +996,6 @@ fn commit_setting_edit(editing: &EditState, ui_state: &mut TuiState, app_state: 
             let value = value.clamp(min, max);
             update_config(app_state, &mut ui_state.settings, |config| {
                 match editing.id {
-                    SettingId::QueryDelayMs => config.query_delay_ms = value as u64,
                     SettingId::MaxResults => config.max_results = value,
                     _ => {}
                 }
@@ -967,16 +1003,25 @@ fn commit_setting_edit(editing: &EditState, ui_state: &mut TuiState, app_state: 
         }
         SettingKind::Text => {
             let value = editing.buffer.trim().to_string();
-            if value.is_empty() {
-                ui_state.settings.status = Some("Value cannot be empty".to_string());
-                return;
-            }
-            update_config(app_state, &mut ui_state.settings, |config| {
-                match editing.id {
-                    SettingId::GlobalHotkey => config.global_hotkey = value.clone(),
-                    _ => {}
+            match editing.id {
+                SettingId::GlobalHotkey => {
+                    if value.is_empty() {
+                        ui_state.settings.status = Some("Value cannot be empty".to_string());
+                        return;
+                    }
+                    update_config(app_state, &mut ui_state.settings, |config| {
+                        config.global_hotkey = value.clone();
+                    });
                 }
-            });
+                SettingId::SystemToolExclusions => {
+                    let parsed = parse_path_list(&value);
+                    update_config(app_state, &mut ui_state.settings, |config| {
+                        config.system_tool_exclusions = parsed;
+                    });
+                    refresh_app_index(app_state);
+                }
+                _ => {}
+            }
         }
         SettingKind::Toggle => {}
     }
@@ -998,16 +1043,21 @@ fn setting_kind(id: SettingId) -> SettingKind {
         .unwrap_or(SettingKind::Text)
 }
 
-fn setting_value(config: &AppConfig, id: SettingId) -> String {
+fn setting_list_value(config: &AppConfig, id: SettingId) -> String {
     match id {
         SettingId::GlobalHotkey => config.global_hotkey.clone(),
-        SettingId::QueryDelayMs => config.query_delay_ms.to_string(),
         SettingId::MaxResults => config.max_results.to_string(),
+        SettingId::SystemToolExclusions => format_path_summary(&config.system_tool_exclusions),
         SettingId::EnableAppResults => bool_label(config.enable_app_results),
         SettingId::EnableBookmarkResults => bool_label(config.enable_bookmark_results),
-        SettingId::ForceEnglishInput => bool_label(config.force_english_input),
-        SettingId::DebugMode => bool_label(config.debug_mode),
         SettingId::LaunchOnStartup => bool_label(config.launch_on_startup),
+    }
+}
+
+fn setting_edit_value(config: &AppConfig, id: SettingId) -> String {
+    match id {
+        SettingId::SystemToolExclusions => format_path_lines(&config.system_tool_exclusions),
+        _ => setting_list_value(config, id),
     }
 }
 
@@ -1017,6 +1067,34 @@ fn bool_label(value: bool) -> String {
     } else {
         "Off".to_string()
     }
+}
+
+fn format_path_lines(paths: &[String]) -> String {
+    paths
+        .iter()
+        .map(|value| value.trim())
+        .filter(|value| !value.is_empty())
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+fn format_path_summary(paths: &[String]) -> String {
+    if paths.is_empty() {
+        "None".to_string()
+    } else if paths.len() == 1 {
+        paths[0].clone()
+    } else {
+        format!("{} paths", paths.len())
+    }
+}
+
+fn parse_path_list(value: &str) -> Vec<String> {
+    value
+        .split(|ch| ch == '\n' || ch == '\r' || ch == ';')
+        .map(|item| item.trim())
+        .filter(|item| !item.is_empty())
+        .map(|item| item.to_string())
+        .collect()
 }
 
 fn update_config(
@@ -1037,6 +1115,35 @@ fn update_config(
         Ok(_) => settings.status = Some("Saved".to_string()),
         Err(err) => settings.status = Some(format!("Save failed: {err}")),
     }
+}
+
+fn refresh_app_index(app_state: &AppState) {
+    let refresh_state = app_state.clone();
+    tokio::spawn(async move {
+        let exclusions = {
+            let config = refresh_state.config.lock().unwrap();
+            config.system_tool_exclusions.clone()
+        };
+        let refreshed = build_index(exclusions).await;
+        if refreshed.is_empty() {
+            return;
+        }
+
+        let mut updated = false;
+        if let Ok(mut guard) = refresh_state.app_index.lock() {
+            if *guard != refreshed {
+                *guard = refreshed.clone();
+                updated = true;
+            }
+        }
+
+        if updated {
+            let _ = cache::save_app_index(&refreshed);
+            if let Ok(mut cache_guard) = refresh_state.search_cache.lock() {
+                cache_guard.clear();
+            }
+        }
+    });
 }
 
 fn slice_input(input: &str, cursor: usize, width: usize) -> (String, usize) {

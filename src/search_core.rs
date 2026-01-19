@@ -100,11 +100,8 @@ pub fn search(
                 let result_id = format!("app-{}", app.id);
                 pending_actions.insert(result_id.clone(), PendingAction::Application(app.clone()));
                 let subtitle = app
-                    .description
-                    .clone()
-                    .filter(|d| !d.is_empty())
-                    .or_else(|| app.source_path.clone())
-                    .unwrap_or_else(|| app.path.clone());
+                    .path
+                    .clone();
                 results.push(SearchResult {
                     id: result_id,
                     title: app.name.clone(),
