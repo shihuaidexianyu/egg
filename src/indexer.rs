@@ -78,6 +78,19 @@ fn is_system_tool(app: &ApplicationInfo, exclusion_paths: &[String]) -> bool {
         if sys_path_lower.starts_with('{') && path_lower.contains(&sys_path_lower) {
             return true;
         }
+        if sys_path_lower.starts_with("shell:appsfolder\\") {
+            let suffix = sys_path_lower.trim_start_matches("shell:appsfolder\\");
+            if !suffix.is_empty() && path_lower.starts_with(suffix) {
+                return true;
+            }
+        }
+        if !looks_like_file_path(&sys_path_lower)
+            && !sys_path_lower.starts_with("shell:")
+            && !sys_path_lower.contains("://")
+            && path_lower.contains(&sys_path_lower)
+        {
+            return true;
+        }
     }
 
     false
