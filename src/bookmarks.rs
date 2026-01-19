@@ -20,20 +20,13 @@ pub struct BookmarkEntry {
     pub pinyin_index: Option<String>,
 }
 
-/// Loads Chrome bookmark entries from all detected profiles under LOCALAPPDATA.
+/// Loads Chromium-based browser bookmark entries from detected profiles.
 pub fn load_chrome_bookmarks() -> Vec<BookmarkEntry> {
     let mut all_entries = Vec::new();
 
-    for profile_dir in chrome_profile_dirs() {
-        let Some(profile_name) = profile_dir
-            .file_name()
-            .and_then(|os| os.to_str())
-            .map(|s| s.to_string())
-        else {
-            continue;
-        };
-        let display_name = profile_display_label(&profile_name);
-        let bookmarks_path = profile_dir.join("Bookmarks");
+    for profile in bookmark_profile_dirs() {
+        let display_name = profile.label;
+        let bookmarks_path = profile.dir.join("Bookmarks");
         if !bookmarks_path.is_file() {
             continue;
         }
@@ -59,32 +52,54 @@ pub fn load_chrome_bookmarks() -> Vec<BookmarkEntry> {
     all_entries
 }
 
-fn chrome_profile_dirs() -> Vec<PathBuf> {
+struct ProfileLocation {
+    dir: PathBuf,
+    label: String,
+}
+
+fn bookmark_profile_dirs() -> Vec<ProfileLocation> {
     let mut results = Vec::new();
-    for root in chrome_user_data_roots() {
+    for (browser_label, root) in bookmark_user_data_roots() {
         if let Ok(entries) = fs::read_dir(&root) {
             for entry in entries.flatten() {
                 let path = entry.path();
-                if path.is_dir() && path.join("Bookmarks").is_file() {
-                    results.push(path);
+                if !path.is_dir() || !path.join("Bookmarks").is_file() {
+                    continue;
                 }
+                let Some(profile_name) = path.file_name().and_then(|os| os.to_str()) else {
+                    continue;
+                };
+                let display_name =
+                    format!("{browser_label} {}", profile_display_label(profile_name));
+                results.push(ProfileLocation {
+                    dir: path,
+                    label: display_name,
+                });
             }
         }
     }
-    results.sort();
-    results.dedup();
+    results.sort_by(|a, b| a.label.cmp(&b.label).then(a.dir.cmp(&b.dir)));
+    results.dedup_by(|a, b| a.dir == b.dir && a.label == b.label);
     results
 }
 
-fn chrome_user_data_roots() -> Vec<PathBuf> {
+fn bookmark_user_data_roots() -> Vec<(String, PathBuf)> {
     let mut roots = Vec::new();
     if let Ok(local_app_data) = env::var("LOCALAPPDATA") {
-        let default_root = Path::new(&local_app_data)
+        let chrome_default = Path::new(&local_app_data)
             .join("Google")
             .join("Chrome")
             .join("User Data");
-        if default_root.is_dir() {
-            roots.push(default_root);
+        if chrome_default.is_dir() {
+            roots.push(("Chrome".to_string(), chrome_default));
+        }
+
+        let edge_default = Path::new(&local_app_data)
+            .join("Microsoft")
+            .join("Edge")
+            .join("User Data");
+        if edge_default.is_dir() {
+            roots.push(("Edge".to_string(), edge_default));
         }
     }
 
@@ -99,14 +114,14 @@ fn chrome_user_data_roots() -> Vec<PathBuf> {
             }
             for candidate in candidates {
                 if candidate.is_dir() {
-                    roots.push(candidate);
+                    roots.push(("Chrome".to_string(), candidate));
                 }
             }
         }
     }
 
-    roots.sort();
-    roots.dedup();
+    roots.sort_by(|a, b| a.0.cmp(&b.0).then(a.1.cmp(&b.1)));
+    roots.dedup_by(|a, b| a.0 == b.0 && a.1 == b.1);
     roots
 }
 
