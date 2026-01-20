@@ -6,7 +6,6 @@ const CONFIG_FILE: &str = "settings.json";
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AppConfig {
-    pub global_hotkey: String,
     #[serde(default = "default_blacklist_hotkey")]
     pub blacklist_hotkey: String,
     #[serde(default = "default_max_results")]
@@ -33,7 +32,6 @@ fn default_system_tool_exclusions() -> Vec<String> {
 impl Default for AppConfig {
     fn default() -> Self {
         Self {
-            global_hotkey: "Alt+Space".to_string(),
             blacklist_hotkey: default_blacklist_hotkey(),
             max_results: default_max_results(),
             enable_app_results: default_enable_app_results(),
@@ -89,6 +87,7 @@ impl AppConfig {
                 if let (serde_json::Value::Object(mut existing_map), serde_json::Value::Object(new_map)) =
                     (existing_value, new_value.clone())
                 {
+                    existing_map.remove("global_hotkey");
                     for (key, val) in new_map {
                         existing_map.insert(key, val);
                     }

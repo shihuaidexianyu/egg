@@ -83,7 +83,6 @@ Default configuration:
 
 ```json
 {
-  "global_hotkey": "Alt+Space",
   "blacklist_hotkey": "Ctrl+B",
   "max_results": 40,
   "enable_app_results": true,
